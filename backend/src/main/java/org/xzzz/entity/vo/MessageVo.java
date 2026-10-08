@@ -2,7 +2,7 @@ package org.xzzz.entity.vo;
 
 import lombok.Data;
 import lombok.NoArgsConstructor;
-import org.springframework.ai.chat.messages.Message;
+import org.xzzz.entity.ChatHistory;
 
 @NoArgsConstructor
 @Data
@@ -10,18 +10,8 @@ public class MessageVo {
     private String role;
     private String content;
 
-    public MessageVo(Message  message) {
-        switch (message.getMessageType()){
-            case USER:
-                role="user";
-                break;
-            case ASSISTANT:
-                role="assistant";
-                break;
-            default:
-                role="";
-                break;
-        }
-        this.content=message.getText();
+    public MessageVo(ChatHistory chatHistory) {
+        this.role = chatHistory.getRole();
+        this.content = chatHistory.getContent();
     }
 }

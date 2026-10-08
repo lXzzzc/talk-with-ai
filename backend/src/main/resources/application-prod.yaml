@@ -1,0 +1,12 @@
+# 生产环境 profile。用法：
+#   java -jar app.jar --spring.profiles.active=prod
+# 或容器里设置 SPRING_PROFILES_ACTIVE=prod
+#
+# 与默认 profile 的差别只有一个：把日志收紧到 info。
+# 默认配置里 org.xzzz 和 SimpleLoggerAdvisor 都是 debug，而 SimpleLoggerAdvisor
+# 会把整段 prompt（包含几万字的系统提示词和用户内容）打进日志——体积和隐私都不可接受。
+logging:
+  level:
+    root: info
+    org.xzzz: ${LOGGING_LEVEL_ORG_XZZZ:info}
+    org.springframework.ai.chat.client.advisor: warn

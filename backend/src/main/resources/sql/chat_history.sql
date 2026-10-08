@@ -1,17 +1,9 @@
+-- 只负责创建数据库。表结构由 Flyway 管理（见 src/main/resources/db/migration/）。
+--
+-- 用法：
+--   mysql -u root -p < backend/src/main/resources/sql/chat_history.sql
+--
+-- 应用启动时 Flyway 会自动建表并回填已有数据，因此不需要再手工执行建表语句。
 CREATE DATABASE IF NOT EXISTS spring_ai_test
     DEFAULT CHARACTER SET utf8mb4
     DEFAULT COLLATE utf8mb4_unicode_ci;
-
-USE spring_ai_test;
-
-CREATE TABLE IF NOT EXISTS chat_history (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT 'primary key',
-    user_id VARCHAR(64) NOT NULL COMMENT 'user id',
-    session_id VARCHAR(128) NOT NULL COMMENT 'session id',
-    role VARCHAR(32) NOT NULL COMMENT 'message role: user/assistant',
-    content LONGTEXT NOT NULL COMMENT 'message content',
-    create_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'create time',
-    INDEX idx_chat_history_session_id (session_id),
-    INDEX idx_chat_history_user_id (user_id),
-    INDEX idx_chat_history_create_time (create_time)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='chat history';

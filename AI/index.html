@@ -3,7 +3,26 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Spring AI 接口测试</title>
+    <meta name="description" content="基于 Spring AI + Vue 3 的 DeepSeek 对话应用，支持 Markdown 渲染、语音朗读与多会话管理。" />
+    <title>昔涟</title>
+    <link rel="icon" type="image/png" href="/ai-avatar.png" />
+    <link rel="apple-touch-icon" href="/ai-avatar.png" />
+    <script>
+      // 在首屏渲染前决定主题，避免深色用户看到一闪而过的白屏
+      ;(function () {
+        var theme = 'dark'
+        try {
+          theme =
+            localStorage.getItem('spring-ai-test-theme') ||
+            (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+        } catch (error) {
+          theme = 'dark'
+        }
+        document.documentElement.dataset.theme = theme
+        document.documentElement.style.backgroundColor = theme === 'light' ? '#faf7ff' : '#0b0713'
+        document.documentElement.style.colorScheme = theme
+      })()
+    </script>
   </head>
   <body>
     <div id="app"></div>

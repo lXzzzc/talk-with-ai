@@ -1,16 +1,35 @@
 package org.xzzz.config;
 
-import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
-@RequestMapping
+/**
+ * 跨域配置。
+ *
+ * <p>这里踩过两个坑，改动时注意：
+ * <ul>
+ *   <li>类上必须是 {@code @Configuration}。原先写的是 {@code @RequestMapping}，导致这个类
+ *       <b>根本不是 Spring Bean</b>，{@code addCorsMappings} 从未被调用过，CORS 配置实际是失效的；
+ *       开发时因为走 Vite 代理属于同源，所以一直没暴露。</li>
+ *   <li>{@code allowCredentials(true)} 时不能用 {@code allowedOrigins("*")}，Spring 会直接抛
+ *       {@code IllegalArgumentException} 让应用启动失败，必须使用 {@code allowedOriginPatterns}。</li>
+ * </ul>
+ *
+ * <p>生产环境若由 Nginx 同域托管前端并反代 {@code /api}，本身不需要跨域，可通过
+ * {@code app.cors.allowed-origins} 把来源收紧到具体域名（逗号分隔）。
+ */
+@Configuration
 public class MvcConfiguration implements WebMvcConfigurer {
+
+    @Value("${app.cors.allowed-origins:*}")
+    private String[] allowedOrigins;
 
     @Override
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/**")
-                .allowedOrigins("*")
+                .allowedOriginPatterns(allowedOrigins)
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                 .allowCredentials(true)
                 .allowedHeaders("*");

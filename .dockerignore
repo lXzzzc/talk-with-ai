@@ -1,0 +1,10 @@
+# 构建镜像时忽略的内容（Nginx 前端镜像的构建上下文是仓库根目录）
+.git
+.gitignore
+.idea
+**/target
+**/node_modules
+**/dist
+**/.env
+*.log
+README.md

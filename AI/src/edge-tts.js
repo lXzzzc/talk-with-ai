@@ -1,4 +1,4 @@
-﻿// Edge TTS client - calls backend /api/ai/tts endpoint
+// Edge TTS client - calls backend /api/ai/tts endpoint
 // Backend handles the WebSocket connection to Microsoft Edge TTS
 
 /**
@@ -16,11 +16,23 @@ export async function synthesize(text, options = {}) {
     return new Blob([], { type: 'audio/mpeg' })
   }
 
-  const url = '/api/ai/tts?text=' + encodeURIComponent(text)
-  const res = await fetch(url, { signal })
+  // POST + JSON：文本不再放进 URL，避免 URL 长度限制与访问日志留痕
+  const res = await fetch('/api/ai/tts', {
+    method: 'POST',
+    signal,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text })
+  })
 
   if (!res.ok) {
-    throw new Error('Edge TTS request failed: HTTP ' + res.status)
+    let detail = `HTTP ${res.status}`
+    try {
+      const data = await res.json()
+      if (data?.message) detail = data.message
+    } catch {
+      // 响应不是 JSON（例如代理返回的错误页），保留状态码即可
+    }
+    throw new Error('Edge TTS request failed: ' + detail)
   }
 
   return res.blob()

@@ -1,36 +1,73 @@
 spring:
   application:
     name: spring-ai-test
+  # 本地开发的密钥放在 backend/.env（已被 .gitignore 忽略，不会提交）。
+  # 生产环境直接用真实环境变量注入即可，见 README「配置与密钥」。
+  config:
+    import: optional:file:.env[.properties]
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://localhost:3306/spring_ai_test?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai
-    username: root
-    password: 11111111
-  data:
-    redis:
-      host: localhost
-      port: 6379
-      database: 0
-      timeout: 5s
+    url: ${DB_URL:jdbc:mysql://localhost:3306/spring_ai_test?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai}
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:}
   ai:
     deepseek:
-      base-url: https://api.deepseek.com
+      base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
       chat:
-        model: deepseek-chat
+        model: ${DEEPSEEK_MODEL:deepseek-chat}
         temperature: 0.7
         max-tokens: 4096
-      api-key: "your own api-key"
+      api-key: ${DEEPSEEK_API_KEY:}
+  # 表结构由 Flyway 管理；已有数据库通过 baseline 接管，不会重跑建表
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    baseline-version: 0
+    locations: classpath:db/migration
+
+# 健康检查（部署时给 Nginx / 容器编排用）
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
 
 mybatis:
   configuration:
     map-underscore-to-camel-case: true
 
+# 跨域：生产建议收紧为具体域名，逗号分隔
+app:
+  cors:
+    allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:*}
+
+# 对话请求与上下文窗口限制
+chat:
+  request:
+    # 单条 prompt 最大字符数，超出返回 400
+    max-prompt-chars: ${CHAT_MAX_PROMPT_CHARS:4000}
+  context:
+    # 送入大模型的历史消息条数上限（系统提示词不占这个额度）
+    max-messages: ${CHAT_CONTEXT_MAX_MESSAGES:20}
+    # 送入大模型的历史正文总字数上限，超出则从最旧的开始丢弃
+    max-chars: ${CHAT_CONTEXT_MAX_CHARS:12000}
+
+# Edge TTS configuration
+tts:
+  voice: ${TTS_VOICE:zh-CN-XiaoxiaoNeural}
+  rate: ${TTS_RATE:0}
+  # 单次合成的文本长度上限，超出返回 400
+  max-text-chars: ${TTS_MAX_TEXT_CHARS:500}
+  cache:
+    max-entries: ${TTS_CACHE_MAX_ENTRIES:200}
+    # 50MB
+    max-bytes: ${TTS_CACHE_MAX_BYTES:52428800}
+
 logging:
   level:
     org.springframework.ai.chat.client.advisor: debug
     org.xzzz: debug
-
-# Edge TTS configuration
-tts:
-  voice: zh-CN-XiaoxiaoNeural
-  rate: 0
