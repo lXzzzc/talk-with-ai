@@ -1,0 +1,8 @@
+# 这些文件会进入 Linux 容器或在容器里执行，必须保持 LF。
+# Windows 下 core.autocrlf=true 会把它们检出成 CRLF，而 CRLF 会破坏
+# Dockerfile 的反斜杠续行（\ 后面跟了 \r），也会让 shell 脚本报
+# "bad interpreter: /bin/sh^M"。
+Dockerfile          text eol=lf
+*.dockerfile        text eol=lf
+*.sh                text eol=lf
+deploy/nginx.conf   text eol=lf
