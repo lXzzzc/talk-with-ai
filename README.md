@@ -204,15 +204,18 @@ mysql -u root -p < backend/src/main/resources/sql/chat_history.sql
 
 ## Docker 部署
 
+> 📘 **完整的上服务器步骤见 [`DEPLOY.md`](DEPLOY.md)**（服务器要求、装 Docker、配密钥、
+> 启动验证、日常运维、备份、域名 HTTPS、常见问题排查）。
+
 ```bash
-export DEEPSEEK_API_KEY=sk-xxxx
-export DB_ROOT_PASSWORD=一个强密码
+cp .env.example .env      # 填好 DB_ROOT_PASSWORD / DB_PASSWORD / DEEPSEEK_API_KEY
 docker compose up -d --build
 ```
 
 会起三个容器：`mysql` + `backend`（多阶段构建的 jar）+ `nginx`（托管前端 `dist` 并反代 `/api`）。
 访问 `http://<服务器IP>/` 即可，表结构由后端启动时的 Flyway 自动创建。
 
+应用使用独立数据库账号 `talkai`（只对 `spring_ai_test` 库有权限），而不是 root。
 改端口用 `HTTP_PORT=8080 docker compose up -d`。后端以非 root 用户运行，并带
 `/actuator/health` 健康检查。
 

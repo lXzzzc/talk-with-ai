@@ -1,8 +1,7 @@
 # 一键起 MySQL + 后端 + Nginx（托管前端并反代 /api）
 #
 # 用法：
-#   export DEEPSEEK_API_KEY=sk-xxxx
-#   export DB_ROOT_PASSWORD=something-strong
+#   cp .env.example .env    # 然后填写其中的三个密码/密钥
 #   docker compose up -d --build
 #
 # 打开 http://<服务器IP>/ 即可使用。
@@ -14,44 +13,72 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?请设置 DB_ROOT_PASSWORD}
       MYSQL_DATABASE: spring_ai_test
+      # 应用不用 root 连库：只为它在 spring_ai_test 上授权（首次初始化数据卷时创建）
+      MYSQL_USER: talkai
+      MYSQL_PASSWORD: ${DB_PASSWORD:?请设置 DB_PASSWORD}
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD"]
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
       interval: 10s
       timeout: 5s
       retries: 12
       start_period: 30s
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      args:
+        # 留空 = 用官方源；国内可设为 https://maven.aliyun.com/repository/public
+        MAVEN_MIRROR_URL: ${MAVEN_MIRROR_URL:-}
     environment:
       SPRING_PROFILES_ACTIVE: prod
-      DB_URL: jdbc:mysql://mysql:3306/spring_ai_test?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai
-      DB_USERNAME: root
-      DB_PASSWORD: ${DB_ROOT_PASSWORD:?请设置 DB_ROOT_PASSWORD}
+      # allowPublicKeyRetrieval=true 必须保留：
+      # MySQL 8 默认 caching_sha2_password，在 useSSL=false 时驱动需要向服务端索取公钥，
+      # 不开启会直接抛 "Public Key Retrieval is not allowed"，应用启动即失败。
+      DB_URL: jdbc:mysql://mysql:3306/spring_ai_test?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai
+      DB_USERNAME: talkai
+      DB_PASSWORD: ${DB_PASSWORD:?请设置 DB_PASSWORD}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?请设置 DEEPSEEK_API_KEY}
-      # 同域部署（Nginx 反代 /api）时其实不需要跨域，可按需收紧
+      # 同域部署（Nginx 反代 /api）本身不存在跨域，可按需收紧成具体域名
       APP_CORS_ALLOWED_ORIGINS: ${APP_CORS_ALLOWED_ORIGINS:-*}
       JAVA_OPTS: ${JAVA_OPTS:--XX:MaxRAMPercentage=75}
     depends_on:
       mysql:
         condition: service_healthy
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   nginx:
     build:
       context: .
       dockerfile: deploy/Dockerfile.web
+      args:
+        # 留空 = 用官方源；国内可设为 https://registry.npmmirror.com
+        NPM_REGISTRY: ${NPM_REGISTRY:-}
     ports:
       - "${HTTP_PORT:-80}:80"
     depends_on:
       - backend
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   mysql-data:
