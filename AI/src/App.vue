@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import { speak } from './edge-tts.js'
+import { playBlob, speak, synthesize } from './tts.js'
 
 const endpoint = '/api/ai/chat'
 const chatType = 'chat'
@@ -454,13 +454,38 @@ function processTtsQueue() {
   ttsPlaying = true
   const item = ttsQueue.shift()
   speakingIndex.value = item.index ?? null
-  speak(item.text, { signal: item.signal })
-    .catch(() => {})
+  const playback = item.blob
+    ? playBlob(item.blob, { signal: item.signal })
+    : speak(item.text, { signal: item.signal })
+  playback
+    .catch((error) => {
+      // IndexTTS 没启动、预设缺失等都会走到这里；提示一次并清空剩余队列，避免连续重试。
+      if (error?.name === 'AbortError') return
+      ttsQueue.length = 0
+      showToast(error?.message || '语音合成失败，请检查本地 IndexTTS 是否已启动')
+    })
     .finally(() => {
       ttsPlaying = false
       if (ttsQueue.length === 0) speakingIndex.value = null
       processTtsQueue()
     })
+}
+
+async function synthesizeMessageAudio(text, signal) {
+  if (!ttsEnabled.value) return []
+  const blobs = []
+  for (const chunk of chunkText(text)) {
+    if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
+    blobs.push(await synthesize(chunk.trim(), { signal }))
+  }
+  return blobs
+}
+
+function enqueueAudioBlobs(blobs, index, signal) {
+  for (const blob of blobs) {
+    if (blob?.size) ttsQueue.push({ blob, signal, index })
+  }
+  processTtsQueue()
 }
 
 /** 把一段文本切成不超过 max 字的片段（优先在句末断开）。 */
@@ -564,6 +589,7 @@ async function runStream(conversation, prompt, { appendUser }) {
   errorText.value = ''
   abortController = new AbortController()
   stopAllTts()
+  if (ttsEnabled.value) ttsAbortController = new AbortController()
 
   if (appendUser) {
     conversation.messages.push({ role: 'user', content: prompt })
@@ -610,16 +636,21 @@ async function runStream(conversation, prompt, { appendUser }) {
       const { done, value } = await reader.read()
       if (done) break
       assistantMessage.content += decoder.decode(value, { stream: true })
-      conversation.messages[messageIndex] = { ...assistantMessage }
-      messages.value = conversation.messages
-      speakNewSentences(messageIndex, assistantMessage.content)
-      await scrollToBottom()
     }
 
     assistantMessage.content += decoder.decode()
+    const finalText = assistantMessage.content.trim()
+    let audioBlobs = []
+    if (ttsEnabled.value && finalText) {
+      audioBlobs = await synthesizeMessageAudio(finalText, ttsAbortController?.signal || new AbortController().signal)
+    }
     conversation.messages[messageIndex] = { ...assistantMessage }
     messages.value = conversation.messages
-    flushTtsTail(messageIndex, assistantMessage.content)
+    if (audioBlobs.length) {
+      const signal = ttsAbortController?.signal || new AbortController().signal
+      enqueueAudioBlobs(audioBlobs, messageIndex, signal)
+    }
+    await scrollToBottom()
   } catch (error) {
     if (error.name === 'AbortError') {
       // 用户点了「停止」：保留已经生成的部分，不当作错误

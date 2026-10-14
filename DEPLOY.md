@@ -16,7 +16,7 @@
                  ┌───────────────▼──────────────────────────┐
                  │  backend 容器 (Spring Boot, 8080)          │
                  │    出网 → api.deepseek.com         (对话)  │
-                 │    出网 → speech.platform.bing.com (TTS)   │
+                 │    WSS → 阿里云 Voice Studio       (TTS)   │
                  └───────────────┬──────────────────────────┘
                                  │
                  ┌───────────────▼──────────────────────────┐
@@ -36,10 +36,10 @@
 | CPU / 内存 | 1 核 2G | 2 核 4G |
 | 磁盘 | 10G | 20G+（MySQL 数据 + 镜像） |
 | 系统 | 任何能装 Docker 的 Linux | Ubuntu 22.04 / Debian 12 |
-| 出网 | 必须能访问 `api.deepseek.com`、`speech.platform.bing.com:443` | — |
+| 出网 | 必须能访问 `api.deepseek.com`、`convai-platform.aliyuncs.com:443` | — |
 | 开放端口 | 80（或你自定义的 `HTTP_PORT`） | 80 + 443 |
 
-> `speech.platform.bing.com:443` 是语音朗读用的。部分机房会被阻断，**断了也不影响文字对话**，只是朗读按钮不可用。
+> `convai-platform.aliyuncs.com:443` 是阿里云语音合成用的。网络不通时不影响文字对话，只是朗读按钮不可用。
 
 ---
 
@@ -275,10 +275,10 @@ Nginx 的 `proxy_buffering` 必须为 `off`。`deploy/nginx.conf` 里已经配�
 
 ### 语音朗读不可用
 
-后端需要能出网访问 `speech.platform.bing.com:443`。在服务器上测：
+后端需要能出网访问 `convai-platform.aliyuncs.com:443`。在服务器上测：
 
 ```bash
-docker compose exec backend sh -c 'curl -sI https://speech.platform.bing.com | head -1'
+docker compose exec backend sh -c 'curl -sI https://convai-platform.aliyuncs.com | head -1'
 ```
 
 不通就是机房/地区被阻断，**不影响文字对话**。

@@ -1,6 +1,6 @@
 # Talk with AI
 
-一个基于 **Spring AI + Vue 3** 的 AI 对话应用，集成 DeepSeek 大模型对话、MySQL 聊天记录持久化，并通过 Edge TTS 实现语音合成播放。
+一个基于 **Spring AI + Vue 3** 的 AI 对话应用，集成 DeepSeek 大模型对话、MySQL 聊天记录持久化，并通过**本地部署的 IndexTTS** 实现语音合成播放。
 
 ## 技术栈
 
@@ -8,7 +8,7 @@
 - Vue 3 + Vite
 - 流式对话（SSE）
 - Markdown 渲染（marked + DOMPurify 消毒）
-- Edge TTS 语音播报（调用后端代理）
+- TTS 语音播报（调用后端代理）
 
 **后端（`backend/`）**
 - Spring Boot 4（Java 21）
@@ -16,7 +16,7 @@
 - MySQL + MyBatis（聊天记录持久化）
 - Flyway（数据库版本管理）
 - Actuator（健康检查）
-- Edge TTS（WebSocket 接入微软语音合成）
+- TTS：HTTP 调用后端代理的阿里云 Voice Studio 实时语音合成
 
 > 聊天记录以 **MySQL 为唯一事实来源**：前端回显和拼装大模型上下文都从数据库读取，
 > 不再依赖 Redis 或 Spring AI 的内存 ChatMemory，因此进程重启后对话上下文依然连续。
@@ -28,7 +28,7 @@ talk with ai/
 ├── AI/                      # 前端（Vue 3 + Vite）
 │   ├── src/
 │   │   ├── App.vue          # 聊天主界面
-│   │   ├── edge-tts.js      # TTS 客户端封装
+│   │   ├── tts.js           # TTS 客户端封装
 │   │   ├── main.js
 │   │   └── styles.css
 │   ├── index.html
@@ -57,7 +57,7 @@ talk with ai/
 - AI 回复按 Markdown 渲染（代码块、列表、表格等）
 - 聊天记录持久化到 MySQL，前端会话列表从数据库读取
 - 按用户隔离的会话数据（匿名 userId，见下文说明）
-- Edge TTS 语音播报（可开关、排队播放、结果带 LRU 缓存）
+- 阿里云 Voice Studio 语音播报（可开关、排队播放、结果带 LRU 缓存）
 - 统一的错误响应、全局异常处理、健康检查
 
 ## 环境要求
@@ -134,7 +134,7 @@ npm run dev
 | GET | `/{type}/{chatId}?userId=` | 会话历史（`type` 固定为 `chat`，仅为历史遗留的路径片段） |
 | PATCH | `/{type}/{chatId}?userId=` | 重命名会话，Body: `{title}` |
 | DELETE | `/{type}/{chatId}?userId=` | 删除会话 |
-| POST | `/ai/tts` | **推荐**。Body: `{text}`，返回 `audio/mpeg` |
+| POST | `/ai/tts` | **推荐**。Body: `{text}`，返回 `audio/wav` |
 | GET | `/ai/tts?text=...` | 兼容旧调用方，长文本请改用 POST |
 | GET | `/actuator/health` | 健康检查（含 liveness / readiness） |
 
@@ -176,9 +176,11 @@ npm run dev
 | `CHAT_MAX_PROMPT_CHARS` | `4000` | 单条提问最大字符数 |
 | `CHAT_CONTEXT_MAX_MESSAGES` | `20` | 送入模型的历史条数上限 |
 | `CHAT_CONTEXT_MAX_CHARS` | `12000` | 送入模型的历史总字数上限 |
-| `TTS_MAX_TEXT_CHARS` | `500` | 单次合成最大字符数 |
+| `TTS_MAX_TEXT_CHARS` | `5000` | 单次合成最大字符数 |
 | `TTS_CACHE_MAX_ENTRIES` / `TTS_CACHE_MAX_BYTES` | `200` / `50MB` | 语音缓存上限 |
-| `TTS_VOICE` / `TTS_RATE` | `zh-CN-XiaoxiaoNeural` / `0` | 音色与语速 |
+| `TTS_ALIYUN_API_KEY` | 空 | **必填**，Voice Studio API Key |
+| `TTS_ALIYUN_VOICE_ID` | 空 | **必填**，Voice Studio 音色 ID |
+| `TTS_ALIYUN_ENDPOINT` | `wss://convai-platform.aliyuncs.com/api-ws/v1/inference` | 实时合成 WebSocket 地址 |
 
 其他：
 
@@ -186,6 +188,11 @@ npm run dev
 - 上下文窗口：长会话只会把最近 `CHAT_CONTEXT_MAX_MESSAGES` 条、且总字数不超过
   `CHAT_CONTEXT_MAX_CHARS` 的历史送给模型（最新一条永远保留）。系统提示词本身约 2700 tokens，
   不做限制会很快撞上模型上下文上限。
+
+## 语音合成（阿里云 Voice Studio）
+
+后端使用 `com.aliyun.convai:convai-voice-sdk:0.1.0` 连接 Voice Studio 实时 WebSocket，
+按音色 ID 合成 WAV 音频。把 `TTS_ALIYUN_API_KEY` 和 `TTS_ALIYUN_VOICE_ID` 写入本地 `.env` 后重启后端即可。
 
 ## 数据库与迁移
 
@@ -228,8 +235,9 @@ docker compose up -d --build
   `APP_CORS_ALLOWED_ORIGINS` 收紧到具体域名。
 - 生产环境请用 `--spring.profiles.active=prod`：它会把日志从 `debug` 收紧到 `info`。
   默认配置下 `SimpleLoggerAdvisor` 会把整段 prompt（含几万字的系统提示词）打进日志。
-- TTS 通过后端与微软 Edge TTS 建立 WebSocket 连接（`speech.platform.bing.com:443`），
-  **需要服务器能出网访问该地址**；部分机房/地区会被阻断，届时语音功能不可用，但不影响文字对话。
+- TTS 使用阿里云 Voice Studio，容器部署时请通过环境变量注入 `TTS_ALIYUN_API_KEY` 和
+  `TTS_ALIYUN_VOICE_ID`，不要把密钥写入镜像或提交到仓库。前端按句朗读并带缓存，
+  所以首句会有等待感，属正常现象。
 - 生产环境不要使用 `root` 连接数据库，建议建专用账号。
 
 ## 注意事项

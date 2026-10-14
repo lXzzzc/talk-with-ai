@@ -39,6 +39,13 @@ public class GlobalExceptionHandler {
         return build(HttpStatus.BAD_REQUEST, message, request);
     }
 
+    /** 本地 TTS 服务（IndexTTS）不可用，网关类错误。 */
+    @ExceptionHandler(TtsException.class)
+    public ResponseEntity<ApiErrorResponse> handleTts(TtsException e, HttpServletRequest request) {
+        log.warn("语音合成失败 {}: {}", request.getRequestURI(), e.getMessage());
+        return build(HttpStatus.BAD_GATEWAY, e.getMessage(), request);
+    }
+
     /** 请求体不是合法 JSON。原始异常信息很长，这里给一句干净的提示。 */
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ResponseEntity<ApiErrorResponse> handleUnreadableBody(HttpMessageNotReadableException e,

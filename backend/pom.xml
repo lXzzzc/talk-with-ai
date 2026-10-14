@@ -48,6 +48,11 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
+        <dependency>
+            <groupId>com.aliyun.convai</groupId>
+            <artifactId>convai-voice-sdk</artifactId>
+            <version>0.1.0</version>
+        </dependency>
         <!--
           注意：Spring Boot 4 把自动配置拆成了独立模块，只加 flyway-core 是不会触发迁移的，
           必须依赖 spring-boot-flyway（它再传递引入 flyway-core）。
