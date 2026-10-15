@@ -490,6 +490,8 @@ function enqueueAudioBlobs(blobs, index, signal) {
 
 /** 把一段文本切成不超过 max 字的片段（优先在句末断开）。 */
 function chunkText(text, max = MAX_TTS_CHARS) {
+  text = removeParentheticalText(text)
+  if (!text.trim()) return []
   const segments = []
   const re = /[^。！？!?.\n]+[。！？!?.\n]?/g
   let match
@@ -515,6 +517,41 @@ function chunkText(text, max = MAX_TTS_CHARS) {
   }
   if (buffer) chunks.push(buffer)
   return chunks.filter((item) => item.trim())
+}
+
+/** 去掉句首独立的括号旁白；正文中的补充说明和未闭合括号仍会被朗读。 */
+function removeParentheticalText(text) {
+  const source = String(text ?? '')
+  let result = ''
+  let pending = ''
+  let omitPending = false
+  const closingStack = []
+  for (const char of source) {
+    if (char === '(' || char === '（') {
+      if (closingStack.length === 0) {
+        omitPending = result.trimEnd() === '' || /[。！？!?.\n]\s*$/.test(result)
+      }
+      pending += char
+      closingStack.push(char === '(' ? ')' : '）')
+      continue
+    }
+
+    if (closingStack.length > 0) {
+      pending += char
+      if (char === closingStack[closingStack.length - 1]) {
+        closingStack.pop()
+        if (closingStack.length === 0) {
+          if (!omitPending) result += pending
+          pending = ''
+        }
+      }
+      continue
+    }
+
+    result += char
+  }
+  // 只有完整配对的括号旁白才删除；未闭合括号原样补回，避免截断后续内容。
+  return result + pending
 }
 
 function enqueueTts(text, index) {
@@ -636,21 +673,29 @@ async function runStream(conversation, prompt, { appendUser }) {
       const { done, value } = await reader.read()
       if (done) break
       assistantMessage.content += decoder.decode(value, { stream: true })
+      // assistantMessage 是插入响应式数组前创建的原始对象；替换数组项才能稳定触发 Vue 更新。
+      conversation.messages[messageIndex] = { ...assistantMessage }
+      messages.value = conversation.messages
+      void scrollToBottom()
     }
 
     assistantMessage.content += decoder.decode()
     const finalText = assistantMessage.content.trim()
-    let audioBlobs = []
-    if (ttsEnabled.value && finalText) {
-      audioBlobs = await synthesizeMessageAudio(finalText, ttsAbortController?.signal || new AbortController().signal)
-    }
     conversation.messages[messageIndex] = { ...assistantMessage }
     messages.value = conversation.messages
-    if (audioBlobs.length) {
-      const signal = ttsAbortController?.signal || new AbortController().signal
-      enqueueAudioBlobs(audioBlobs, messageIndex, signal)
-    }
     await scrollToBottom()
+
+    // 聊天已经成功时，TTS 失败不应覆盖回复或让发送按钮继续等待；放到后台独立处理。
+    if (ttsEnabled.value && finalText) {
+      const signal = ttsAbortController?.signal || new AbortController().signal
+      void synthesizeMessageAudio(finalText, signal)
+        .then((audioBlobs) => enqueueAudioBlobs(audioBlobs, messageIndex, signal))
+        .catch((error) => {
+          if (error?.name !== 'AbortError') {
+            showToast(error?.message || '语音合成失败')
+          }
+        })
+    }
   } catch (error) {
     if (error.name === 'AbortError') {
       // 用户点了「停止」：保留已经生成的部分，不当作错误

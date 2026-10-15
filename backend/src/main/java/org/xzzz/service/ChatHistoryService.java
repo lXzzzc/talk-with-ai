@@ -6,6 +6,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.xzzz.entity.ChatHistory;
 import org.xzzz.entity.vo.ConversationVo;
+import org.xzzz.exception.ConversationNotFoundException;
 import org.xzzz.mapper.ChatHistoryMapper;
 
 import java.util.List;
@@ -42,10 +43,15 @@ public class ChatHistoryService {
      *
      * <p>同步执行，必须在读取上下文之前完成，否则读不到刚发出的这条消息。
      */
+    @Transactional
     public void save(String userId, String sessionId, String role, String content) {
-        chatHistoryMapper.insert(ChatHistory.of(userId, sessionId, role, content));
-        // 会话已存在时这里只刷新 updated_at，原标题不会被覆盖
+        // 先原子地创建/触碰会话，再验证归属，最后才写消息。这样即使攻击者猜到别人的
+        // sessionId，也不能把消息写进该会话或读取它的上下文；事务还能避免留下孤儿消息。
         chatHistoryMapper.upsertConversation(sessionId, userId, deriveTitle(content));
+        if (!isOwnedBy(sessionId, userId)) {
+            throw new ConversationNotFoundException();
+        }
+        chatHistoryMapper.insert(ChatHistory.of(userId, sessionId, role, content));
     }
 
     /**

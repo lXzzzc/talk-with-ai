@@ -61,27 +61,33 @@ export function playBlob(blob, options = {}) {
   const audio = new Audio(audioUrl)
 
   return new Promise((resolve, reject) => {
+    let settled = false
+
+    const cleanup = () => {
+      signal?.removeEventListener('abort', abort)
+      audio.onended = null
+      audio.onerror = null
+      URL.revokeObjectURL(audioUrl)
+    }
+
+    const finish = (callback, value) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      callback(value)
+    }
+
     const abort = () => {
       audio.pause()
-      URL.revokeObjectURL(audioUrl)
-      const error = new DOMException('Aborted', 'AbortError')
-      reject(error)
+      finish(reject, new DOMException('Aborted', 'AbortError'))
     }
     if (signal?.aborted) {
       abort()
       return
     }
     signal?.addEventListener('abort', abort, { once: true })
-    audio.onended = () => {
-      signal?.removeEventListener('abort', abort)
-      URL.revokeObjectURL(audioUrl)
-      resolve()
-    }
-    audio.onerror = () => {
-      signal?.removeEventListener('abort', abort)
-      URL.revokeObjectURL(audioUrl)
-      reject(new Error('Audio playback failed'))
-    }
-    audio.play().catch(reject)
+    audio.onended = () => finish(resolve)
+    audio.onerror = () => finish(reject, new Error('Audio playback failed'))
+    audio.play().catch((error) => finish(reject, error))
   })
 }

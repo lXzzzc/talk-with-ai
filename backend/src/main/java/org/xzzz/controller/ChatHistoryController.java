@@ -2,7 +2,6 @@ package org.xzzz.controller;
 
 
 import lombok.RequiredArgsConstructor;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -12,10 +11,10 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.server.ResponseStatusException;
 import org.xzzz.entity.dto.RenameRequest;
 import org.xzzz.entity.vo.ConversationVo;
 import org.xzzz.entity.vo.MessageVo;
+import org.xzzz.exception.ConversationNotFoundException;
 import org.xzzz.service.ChatHistoryService;
 
 import java.util.List;
@@ -83,7 +82,7 @@ public class ChatHistoryController {
 
     private void requireOwned(String chatId, String userId) {
         if (!chatHistoryService.isOwnedBy(chatId, userId)) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "会话不存在");
+            throw new ConversationNotFoundException();
         }
     }
 }

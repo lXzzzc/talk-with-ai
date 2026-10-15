@@ -13,8 +13,8 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
  *   <li>类上必须是 {@code @Configuration}。原先写的是 {@code @RequestMapping}，导致这个类
  *       <b>根本不是 Spring Bean</b>，{@code addCorsMappings} 从未被调用过，CORS 配置实际是失效的；
  *       开发时因为走 Vite 代理属于同源，所以一直没暴露。</li>
- *   <li>{@code allowCredentials(true)} 时不能用 {@code allowedOrigins("*")}，Spring 会直接抛
- *       {@code IllegalArgumentException} 让应用启动失败，必须使用 {@code allowedOriginPatterns}。</li>
+ *   <li>应用当前没有 Cookie/HTTP 登录态，因此保持 {@code allowCredentials(false)}；
+ *       后续若接入认证，应同时把允许来源收紧到可信域名。</li>
  * </ul>
  *
  * <p>生产环境若由 Nginx 同域托管前端并反代 {@code /api}，本身不需要跨域，可通过
@@ -30,8 +30,10 @@ public class MvcConfiguration implements WebMvcConfigurer {
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/**")
                 .allowedOriginPatterns(allowedOrigins)
-                .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-                .allowCredentials(true)
+                .allowedMethods("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
+                // 当前应用不使用 Cookie/HTTP 认证信息，禁止跨域携带凭据可避免未来接入
+                // 登录后被宽泛的 Origin 配置意外放大攻击面。
+                .allowCredentials(false)
                 .allowedHeaders("*");
     }
 }

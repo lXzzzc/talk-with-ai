@@ -53,6 +53,12 @@ public class GlobalExceptionHandler {
         return build(HttpStatus.BAD_REQUEST, "请求体不是合法的 JSON", request);
     }
 
+    @ExceptionHandler(ConversationNotFoundException.class)
+    public ResponseEntity<ApiErrorResponse> handleConversationNotFound(ConversationNotFoundException e,
+                                                                        HttpServletRequest request) {
+        return build(HttpStatus.NOT_FOUND, e.getMessage(), request);
+    }
+
     /**
      * 兜底处理。
      *
