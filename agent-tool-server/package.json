@@ -1,0 +1,28 @@
+{
+  "name": "@talk-with-ai/local-computer-tools",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A permission-gated local MCP server for safe Windows computer-control tools.",
+  "type": "module",
+  "bin": {
+    "talk-with-ai-tools": "dist/server.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "test": "npm run build && node --test dist/policy.test.js dist/mcp.test.js",
+    "check": "npm run test",
+    "register:codex": "npm run build && node scripts/register-codex.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "^7.0.2"
+  }
+}

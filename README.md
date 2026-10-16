@@ -34,19 +34,20 @@ talk with ai/
 │   ├── index.html
 │   ├── package.json
 │   └── vite.config.js       # 开发期把 /api 代理到后端 8080
-└── backend/                 # 后端（Spring Boot）
-    ├── .env.example         # 密钥模板（复制为 .env，已被 gitignore）
-    └── src/main/
-        ├── java/org/xzzz/
-        │   ├── config/      # ChatClient、跨域、提示词读取
-        │   ├── controller/  # Chat / ChatHistory / TTS 接口
-        │   ├── service/     # 对话服务、聊天记录读写、TTS
-        │   ├── mapper/      # MyBatis Mapper
-        │   └── entity/      # 实体类与 VO
-        └── resources/
-            ├── application.yaml
-            ├── prompt/xilian.txt   # 角色提示词
-            └── sql/chat_history.sql
+├── backend/                 # 后端（Spring Boot）
+│   ├── .env.example         # 密钥模板（复制为 .env，已被 gitignore）
+│   └── src/main/
+│       ├── java/org/xzzz/
+│       │   ├── config/      # ChatClient、跨域、提示词读取
+│       │   ├── controller/  # Chat / ChatHistory / TTS 接口
+│       │   ├── service/     # 对话服务、聊天记录读写、TTS
+│       │   ├── mapper/      # MyBatis Mapper
+│       │   └── entity/      # 实体类与 VO
+│       └── resources/
+│           ├── application.yaml
+│           ├── prompt/xilian.txt   # 角色提示词
+│           └── sql/chat_history.sql
+└── agent-tool-server/       # 本地 Windows MCP 工具服务（默认只读）
 ```
 
 ## 功能特性
@@ -244,6 +245,12 @@ docker compose up -d --build
 
 - 聊天记录只存 MySQL，读取路径也是 MySQL。
 - 请勿将真实 API Key 提交到版本库；本项目已通过 `.gitignore` 忽略 `.env`。
+
+## 本地 Agent 电脑工具
+
+`agent-tool-server/` 提供一个 Windows 本地 MCP 服务，包含窗口枚举、屏幕截图、鼠标位置以及
+受权限开关保护的打开应用、打开网址、点击和输入工具。默认注册为只读，具体安装、安全边界和
+写权限开启方式见 [`agent-tool-server/README.md`](agent-tool-server/README.md)。
 
 ## License
 

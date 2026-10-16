@@ -44,6 +44,11 @@ application-local.properties
 logs/
 *.log
 *.tmp
+*.wav
+.tmp-*/
+.tmp-*.cmd
+.tmp-mvn-settings.xml
+META-INF/
 
 # ============================================================
 #  操作系统
