@@ -576,12 +576,14 @@ button {
   display: flex;
   flex-direction: column;
   gap: 22px;
+  width: min(100%, 860px);
   max-width: 860px;
   margin: 0 auto;
 }
 
 .msg {
   display: flex;
+  width: 100%;
   gap: 12px;
   animation: rise 0.26s ease both;
 }
