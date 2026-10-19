@@ -1,6 +1,9 @@
 // TTS 客户端封装 —— 调用后端 /api/ai/tts 接口。
 // 后端把请求转发给本地部署的 IndexTTS（index-tts 项目的 WebUI），返回 WAV 音频。
 
+import { apiUrl } from './api.js'
+import { httpFetch } from './http.js'
+
 /**
  * 调用后端合成语音。
  *
@@ -17,7 +20,7 @@ export async function synthesize(text, options = {}) {
   }
 
   // POST + JSON：文本不再放进 URL，避免 URL 长度限制与访问日志留痕
-  const res = await fetch('/api/ai/tts', {
+  const res = await httpFetch(apiUrl('/api/ai/tts'), {
     method: 'POST',
     signal,
     headers: { 'Content-Type': 'application/json' },

@@ -27,6 +27,10 @@ spring:
     baseline-on-migrate: true
     baseline-version: 0
     locations: classpath:db/migration
+  servlet:
+    multipart:
+      max-file-size: ${MULTIPART_MAX_FILE_SIZE:10MB}
+      max-request-size: ${MULTIPART_MAX_REQUEST_SIZE:12MB}
 
 # 健康检查（部署时给 Nginx / 容器编排用）
 management:
@@ -71,6 +75,29 @@ tts:
     sample-rate: ${TTS_ALIYUN_SAMPLE_RATE:22050}
     rate: ${TTS_ALIYUN_RATE:1.0}
     pitch: ${TTS_ALIYUN_PITCH:1.0}
+
+# 语音识别使用百炼 OpenAI 兼容网关。新版百炼可将 chat-url 改成带
+# WorkspaceId 的业务空间专属地址；旧 dashscope 域名仍可用。
+aliyun:
+  model-studio:
+    api-key: ${DASHSCOPE_API_KEY:}
+    chat-url: ${DASHSCOPE_CHAT_URL:https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions}
+
+asr:
+  # Base64 会膨胀约 1/3；限制原始录音为 7MiB，确保编码后仍低于模型的 10MB 上限。
+  max-audio-bytes: ${ASR_MAX_AUDIO_BYTES:7340032}
+  aliyun:
+    model: ${ASR_ALIYUN_MODEL:qwen3-asr-flash}
+
+vision:
+  max-image-bytes: ${VISION_MAX_IMAGE_BYTES:6291456}
+  deepseek:
+    # deepseek-flash 当前指向最新的 DeepSeek V4.1 Flash，并支持图片输入。
+    model: ${VISION_DEEPSEEK_MODEL:deepseek-flash}
+
+weather:
+  geocoding-url: ${WEATHER_GEOCODING_URL:https://geocoding-api.open-meteo.com/v1/search}
+  forecast-url: ${WEATHER_FORECAST_URL:https://api.open-meteo.com/v1/forecast}
 
 logging:
   level:

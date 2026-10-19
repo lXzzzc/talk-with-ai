@@ -59,6 +59,10 @@ talk with ai/
 - 聊天记录持久化到 MySQL，前端会话列表从数据库读取
 - 按用户隔离的会话数据（匿名 userId，见下文说明）
 - 阿里云 Voice Studio 语音播报（可开关、排队播放、结果带 LRU 缓存）
+- 桌面端按住说话：松开后用 Qwen3-ASR 转文字，自动提问并朗读 AI 回复
+- 桌面端窗口理解：截取前台窗口、本地预览确认，再由 DeepSeek V4.1 Flash 分析图片
+- 当地天气查询（城市搜索 / 浏览器定位）、3 天预报与出行穿衣建议
+- 桌面端本地命令：发现当前电脑已安装的软件，确认后安全启动
 - 统一的错误响应、全局异常处理、健康检查
 
 ## 环境要求
@@ -136,8 +140,12 @@ npm run dev
 | PATCH | `/{type}/{chatId}?userId=` | 重命名会话，Body: `{title}` |
 | DELETE | `/{type}/{chatId}?userId=` | 删除会话 |
 | POST | `/ai/tts` | **推荐**。Body: `{text}`，返回 `audio/wav` |
+| POST | `/ai/asr` | multipart `audio`，返回语音识别文本 |
+| POST | `/ai/vision` | multipart `image` + `userId` / `conversationId` / `question` / `windowTitle` |
 | GET | `/ai/tts?text=...` | 兼容旧调用方，长文本请改用 POST |
 | GET | `/actuator/health` | 健康检查（含 liveness / readiness） |
+| GET | `/weather?city=杭州` | 按城市查询当前天气、3 天预报和建议 |
+| GET | `/weather?latitude=30.3&longitude=120.2` | 按坐标查询天气（前端“使用我的位置”） |
 
 错误统一返回 JSON：`{timestamp, status, error, message, path}`。
 
@@ -182,10 +190,17 @@ npm run dev
 | `TTS_ALIYUN_API_KEY` | 空 | **必填**，Voice Studio API Key |
 | `TTS_ALIYUN_VOICE_ID` | 空 | **必填**，Voice Studio 音色 ID |
 | `TTS_ALIYUN_ENDPOINT` | `wss://convai-platform.aliyuncs.com/api-ws/v1/inference` | 实时合成 WebSocket 地址 |
+| `DASHSCOPE_API_KEY` | 空 | **必填**，服务端调用 Qwen3-ASR |
+| `DASHSCOPE_CHAT_URL` | 阿里云百炼 OpenAI 兼容地址 | 语音识别网关 |
+| `VISION_DEEPSEEK_MODEL` | `deepseek-flash` | 截图理解模型，当前对应 DeepSeek V4.1 Flash |
+| `ASR_ALIYUN_MODEL` | `qwen3-asr-flash` | 语音识别模型 |
+| `WEATHER_GEOCODING_URL` | Open-Meteo Geocoding API | 城市搜索服务地址，通常无需修改 |
+| `WEATHER_FORECAST_URL` | Open-Meteo Forecast API | 天气预报服务地址，通常无需修改 |
 
 其他：
 
 - 角色提示词位于 `backend/src/main/resources/prompt/xilian.txt`，可自定义修改。
+- 天气功能使用 Open-Meteo，不需要额外 API Key；服务器需要能够访问其 API 域名。
 - 上下文窗口：长会话只会把最近 `CHAT_CONTEXT_MAX_MESSAGES` 条、且总字数不超过
   `CHAT_CONTEXT_MAX_CHARS` 的历史送给模型（最新一条永远保留）。系统提示词本身约 2700 tokens，
   不做限制会很快撞上模型上下文上限。
@@ -251,6 +266,57 @@ docker compose up -d --build
 `agent-tool-server/` 提供一个 Windows 本地 MCP 服务，包含窗口枚举、屏幕截图、鼠标位置以及
 受权限开关保护的打开应用、打开网址、点击和输入工具。默认注册为只读，具体安装、安全边界和
 写权限开启方式见 [`agent-tool-server/README.md`](agent-tool-server/README.md)。
+
+## Windows 桌面客户端
+
+前端已接入 Tauri 2，可继续作为网站运行，也可以构建 Windows NSIS 安装包。桌面版默认连接
+`http://101.35.54.118`；构建其他环境时通过 `TALK_AI_DESKTOP_API_URL` 覆盖，密钥仍只保留在服务端。
+
+```powershell
+cd AI
+npm install
+$env:TALK_AI_DESKTOP_API_URL = 'https://你的域名'
+npm run desktop:build
+```
+
+安装包输出到 `AI/src-tauri/target/release/bundle/nsis/`。关闭主窗口时应用会隐藏到系统托盘，
+托盘菜单可以重新显示或彻底退出；重复启动会激活已有窗口。
+
+本地调试桌面版可运行 `npm run desktop:dev`。它默认连接已部署服务器；同时在浏览器打开
+`http://localhost:5173` 时，请求会通过 Vite 同源代理转发，不会把 localhost 的 Origin 发送给服务器。
+
+### 打开本地软件
+
+桌面客户端支持 `/打开 计算器`、“帮我打开记事本”或“打开微信”这类命令。它会从当前电脑的
+开始菜单、Windows 注册表和系统 PATH 中检索软件，并把目录缓存到
+`%LOCALAPPDATA%\com.xzzz.talkwithai\applications.json`。缓存没有命中时会自动重新扫描；仍然
+找不到时，可以手动选择 `.exe` 或 `.lnk`，该映射只保存在当前电脑。
+
+发现多个同名软件时需要先选择，所有软件都只有在用户确认后才会启动。启动逻辑只接受本机目录
+生成的软件 ID，不会执行聊天中的路径、参数、Shell、CMD 或 PowerShell 内容。网页版不会执行
+本地软件命令。启动成功后，客户端只把软件显示名称和“启动成功”事件作为对话上下文发送给
+服务端，让 AI 按角色自然回应；不会上传安装路径，也不会让 AI 假装看到了软件中的窗口或文件。
+
+### 窗口截图理解与按住说话
+
+桌面端标题栏的相机按钮会临时隐藏自身，再截取当时位于前台的 Windows 窗口。截图先留在
+本机预览，只有点击“发送并分析”后才上传；上传前应主动检查账号、密钥等敏感信息。第一阶段
+仅支持 Windows，并且只截取单个前台窗口，不会持续录屏。
+
+输入框旁的麦克风按钮支持鼠标或触控“按住说话、松开发送”，最长录制 60 秒。客户端仅把
+本次录音上传到 `/api/ai/asr` 转写，识别文本会沿用普通对话链路发送，AI 回复则沿用现有 TTS
+自动朗读。首次使用需要允许麦克风权限；网页端使用麦克风时必须运行在 HTTPS 或 localhost。
+
+截图理解复用已有的 `DEEPSEEK_API_KEY`，语音识别需要 `DASHSCOPE_API_KEY`；两个密钥都只在
+服务端使用，不会进入前端或安装包。Nginx 需要将 `client_max_body_size` 设为至少 `12m`，
+仓库中的部署配置已经包含该限制。
+
+### 桌面端服务器连接
+
+桌面构建会把 `TALK_AI_DESKTOP_API_URL` 注入为 API 根地址。跨域请求通过 Tauri 原生 HTTP
+插件发送，并把 `Origin` 规范化为目标服务器自身来源，避免 WebView 的 `tauri.localhost`
+被服务端 CORS 拦截；默认允许 `http://101.35.54.118`，自定义服务器建议使用
+HTTPS，并需要按上面的命令重新构建安装包。
 
 ## License
 

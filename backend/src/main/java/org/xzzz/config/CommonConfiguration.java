@@ -5,6 +5,7 @@ import org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor;
 import org.springframework.ai.deepseek.DeepSeekChatModel;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.xzzz.tool.WeatherTools;
 
 
 @Configuration
@@ -16,10 +17,12 @@ public class CommonConfiguration {
      * 那个 advisor 会额外往 prompt 里注入一份记忆，与显式传入的历史重复。
      */
     @Bean
-    public ChatClient chatClient(DeepSeekChatModel model, PromptFileReader promptFileReader) throws Exception{
+    public ChatClient chatClient(DeepSeekChatModel model, PromptFileReader promptFileReader,
+                                 WeatherTools weatherTools) throws Exception {
         return ChatClient
                 .builder(model)
                 .defaultSystem(promptFileReader.readTxt("xilian.txt"))
+                .defaultTools(weatherTools)
                 .defaultAdvisors(new SimpleLoggerAdvisor())
                 .build();
     }

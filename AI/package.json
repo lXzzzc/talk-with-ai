@@ -1,18 +1,29 @@
 {
   "name": "spring-ai-test-client",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
-    "preview": "vite preview --host 0.0.0.0"
+    "build:desktop": "node scripts/build-desktop.mjs",
+    "desktop:dev": "node scripts/dev-desktop.mjs",
+    "desktop:build": "tauri build",
+    "preview": "vite preview --host 0.0.0.0",
+    "test": "node --test src/*.test.js",
+    "tauri": "tauri"
   },
   "dependencies": {
+    "@tauri-apps/api": "^2.12.4",
+    "@tauri-apps/plugin-dialog": "^2.4.0",
+    "@tauri-apps/plugin-http": "^2.8.3",
     "@vitejs/plugin-vue": "^5.2.4",
     "dompurify": "^3.4.16",
     "marked": "^18.0.14",
     "vite": "^6.3.5",
     "vue": "^3.5.17"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.9.6"
   }
 }

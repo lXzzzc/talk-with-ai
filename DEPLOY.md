@@ -15,7 +15,8 @@
                                  │
                  ┌───────────────▼──────────────────────────┐
                  │  backend 容器 (Spring Boot, 8080)          │
-                 │    出网 → api.deepseek.com         (对话)  │
+                 │    出网 → api.deepseek.com   (对话/识图)   │
+                 │    出网 → 阿里云百炼          (语音识别)   │
                  │    WSS → 阿里云 Voice Studio       (TTS)   │
                  └───────────────┬──────────────────────────┘
                                  │
@@ -123,12 +124,15 @@ cp .env.example .env
 vim .env          # 或 nano .env
 ```
 
-必填三项：
+必填密钥：
 
 ```properties
 DB_ROOT_PASSWORD=一个强密码          # MySQL root，仅容器内部使用
 DB_PASSWORD=另一个强密码             # 应用账号 talkai 的密码
 DEEPSEEK_API_KEY=sk-你的真实key
+TTS_ALIYUN_API_KEY=sk-你的 Voice Studio key
+TTS_ALIYUN_VOICE_ID=你的音色ID
+DASHSCOPE_API_KEY=sk-你的百炼key
 ```
 
 可选：

@@ -2,13 +2,30 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
+import { apiUrl } from './api.js'
+import { httpFetch } from './http.js'
+import {
+  chooseLocalApplicationFile,
+  findLocalApplications,
+  openLocalApplication,
+  parseOpenApplicationCommand
+} from './localCommands.js'
+import { isDesktopRuntime } from './runtime.js'
+import { analyzeWindowCapture, captureCurrentWindow } from './screenVision.js'
 import { playBlob, speak, synthesize } from './tts.js'
+import {
+  isVoiceInputSupported,
+  startVoiceRecording,
+  transcribeAudio
+} from './voiceInput.js'
 
-const endpoint = '/api/ai/chat'
+const endpoint = apiUrl('/api/ai/chat')
 const chatType = 'chat'
 const storageKey = 'spring-ai-test-conversations'
 const userIdKey = 'spring-ai-test-user-id'
 const themeKey = 'spring-ai-test-theme'
+const weatherCityKey = 'spring-ai-test-weather-city'
+const weatherLocationKey = 'spring-ai-test-weather-location'
 const historyListEndpoint = '/api/getChatIds'
 
 /** 与后端 chat.request.max-prompt-chars 保持一致。 */
@@ -26,6 +43,7 @@ marked.setOptions({ breaks: true, gfm: true })
  * 真要对外开放还需要接入真正的登录体系。
  */
 const userId = resolveUserId()
+const desktopRuntime = isDesktopRuntime()
 
 function newUserId() {
   return crypto.randomUUID?.() || `u-${Date.now()}-${Math.random().toString(16).slice(2)}`
@@ -47,6 +65,7 @@ const activeConversationId = ref('')
 const inputText = ref('')
 const messages = ref([])
 const isLoading = ref(false)
+const responseStage = ref('idle')
 const errorText = ref('')
 const textareaRef = ref(null)
 const editingId = ref('')
@@ -55,6 +74,26 @@ const sidebarOpen = ref(false)
 const isPinned = ref(true)
 const toast = ref('')
 const speakingIndex = ref(null)
+const weatherOpen = ref(false)
+const weatherCity = ref(localStorage.getItem(weatherCityKey) || '')
+const weatherLocation = ref(localStorage.getItem(weatherLocationKey) || weatherCity.value)
+const weatherData = ref(null)
+const weatherLoading = ref(false)
+const weatherError = ref('')
+const pendingAppLaunch = ref(null)
+const openingApp = ref(false)
+const recentApplication = ref(null)
+const screenshotPreview = ref(null)
+const screenshotQuestion = ref('')
+const screenshotBusy = ref(false)
+const voiceState = ref('idle')
+
+const suggestions = [
+  { icon: '✨', title: '随便聊聊', text: '今天有什么值得开心的小事？' },
+  { icon: '📚', title: '帮我学习', text: '请用简单的方式教我一个有趣的新知识。' },
+  { icon: '💡', title: '一起想想', text: '帮我整理一下今天最重要的三件事。' },
+  { icon: '🌤️', title: '天气建议', text: '打开右上角的天气按钮，看看今天适合做什么。' }
+]
 
 /** 主题：index.html 里的内联脚本已经先写好 data-theme，这里只负责读取和切换。 */
 const theme = ref(document.documentElement.dataset.theme === 'light' ? 'light' : 'dark')
@@ -64,6 +103,9 @@ let ttsAbortController = null
 const ttsQueue = []
 let ttsPlaying = false
 let toastTimer = null
+let voiceRecorder = null
+let voicePressActive = false
+let voiceMaxTimer = null
 
 const ttsEnabled = ref(true)
 const ttsSpokenPositions = ref({})
@@ -72,20 +114,48 @@ const activeConversation = computed(
   () => conversations.value.find((item) => item.id === activeConversationId.value) || null
 )
 
+const selectedPendingApplication = computed(() => {
+  const pending = pendingAppLaunch.value
+  if (!pending) return null
+  return (
+    pending.applications.find((application) => application.id === pending.selectedApplicationId) ||
+    pending.applications[0] ||
+    null
+  )
+})
+
 const headerTitle = computed(() => activeConversation.value?.title || '新对话')
 
 const headerSub = computed(() => {
-  if (isLoading.value) return '正在生成回复…'
+  if (voiceState.value === 'requesting') return '正在请求麦克风权限…'
+  if (voiceState.value === 'recording') return '正在聆听，松开后发送'
+  if (voiceState.value === 'transcribing') return '正在识别你的话…'
+  if (responseStage.value === 'analyzing') return '正在查看你确认的窗口截图…'
+  if (isLoading.value) return ''
   if (errorText.value) return '请求出错，请查看对话中的提示'
   return ''
 })
 
-const canSend = computed(() => inputText.value.trim().length > 0 && !isLoading.value)
+const canSend = computed(
+  () =>
+    inputText.value.trim().length > 0 &&
+    !isLoading.value &&
+    !openingApp.value &&
+    !screenshotBusy.value &&
+    voiceState.value === 'idle'
+)
+
+const voiceButtonTitle = computed(() => {
+  if (voiceState.value === 'recording') return '松开并发送'
+  if (voiceState.value === 'requesting') return '正在请求麦克风权限'
+  if (voiceState.value === 'transcribing') return '正在识别语音'
+  return '按住说话'
+})
 
 
 
 function withUser(url) {
-  const target = new URL(url, window.location.origin)
+  const target = new URL(apiUrl(url), window.location.origin)
   target.searchParams.set('userId', userId)
   return target.toString()
 }
@@ -259,7 +329,7 @@ function loadConversations() {
 // 会话列表以数据库为准；localStorage 只作兼容，用来保留「还没发过消息、因而尚未入库」的新对话。
 async function fetchConversations() {
   try {
-    const res = await fetch(withUser(historyListEndpoint))
+    const res = await httpFetch(withUser(historyListEndpoint))
     if (!res.ok) return []
     const data = await res.json()
     if (!Array.isArray(data)) return []
@@ -289,6 +359,7 @@ function mergeConversations(remote, local) {
 function newChat() {
   stopRequest()
   stopAllTts()
+  pendingAppLaunch.value = null
   activeConversationId.value = createConversationId()
   inputText.value = ''
   messages.value = []
@@ -315,7 +386,7 @@ async function selectConversation(conversation) {
   }
 
   try {
-    const res = await fetch(withUser(`/api/${chatType}/${encodeURIComponent(conversation.id)}`))
+    const res = await httpFetch(withUser(`/api/${chatType}/${encodeURIComponent(conversation.id)}`))
     if (!res.ok) {
       throw new Error(await readErrorMessage(res))
     }
@@ -339,7 +410,7 @@ async function removeConversation(conversation) {
   if (!window.confirm(`确定删除会话「${conversation.title}」？删除后无法恢复。`)) return
 
   try {
-    const res = await fetch(withUser(`/api/${chatType}/${encodeURIComponent(conversation.id)}`), {
+    const res = await httpFetch(withUser(`/api/${chatType}/${encodeURIComponent(conversation.id)}`), {
       method: 'DELETE'
     })
     // 404 说明服务端本来就没有这条记录，本地删掉即可
@@ -375,7 +446,7 @@ async function commitRename(conversation) {
   if (!title || title === conversation.title) return
 
   try {
-    const res = await fetch(withUser(`/api/${chatType}/${encodeURIComponent(conversation.id)}`), {
+    const res = await httpFetch(withUser(`/api/${chatType}/${encodeURIComponent(conversation.id)}`), {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title })
@@ -438,6 +509,7 @@ function jumpToBottom() {
 
 function stopRequest() {
   abortController?.abort()
+  ttsAbortController?.abort()
 }
 
 function stopAllTts() {
@@ -519,20 +591,27 @@ function chunkText(text, max = MAX_TTS_CHARS) {
   return chunks.filter((item) => item.trim())
 }
 
-/** 去掉句首独立的括号旁白；正文中的补充说明和未闭合括号仍会被朗读。 */
+/** 去掉所有完整配对的括号及其中内容；支持常见中英文括号和嵌套。 */
 function removeParentheticalText(text) {
   const source = String(text ?? '')
   let result = ''
   let pending = ''
-  let omitPending = false
   const closingStack = []
+  const bracketPairs = {
+    '(': ')',
+    '（': '）',
+    '[': ']',
+    '［': '］',
+    '【': '】',
+    '{': '}',
+    '｛': '｝',
+    '〔': '〕'
+  }
+
   for (const char of source) {
-    if (char === '(' || char === '（') {
-      if (closingStack.length === 0) {
-        omitPending = result.trimEnd() === '' || /[。！？!?.\n]\s*$/.test(result)
-      }
+    if (bracketPairs[char]) {
       pending += char
-      closingStack.push(char === '(' ? ')' : '）')
+      closingStack.push(bracketPairs[char])
       continue
     }
 
@@ -541,7 +620,6 @@ function removeParentheticalText(text) {
       if (char === closingStack[closingStack.length - 1]) {
         closingStack.pop()
         if (closingStack.length === 0) {
-          if (!omitPending) result += pending
           pending = ''
         }
       }
@@ -550,7 +628,7 @@ function removeParentheticalText(text) {
 
     result += char
   }
-  // 只有完整配对的括号旁白才删除；未闭合括号原样补回，避免截断后续内容。
+  // 未闭合的括号原样补回，避免输入有误时把后续正文全部吞掉。
   return result + pending
 }
 
@@ -621,8 +699,9 @@ function toggleTts() {
 
 /* ------------------------------------------------------------ 发送流程 */
 
-async function runStream(conversation, prompt, { appendUser }) {
+async function runStream(conversation, prompt, { appendUser, localAction = null }) {
   isLoading.value = true
+  responseStage.value = 'generating'
   errorText.value = ''
   abortController = new AbortController()
   stopAllTts()
@@ -638,10 +717,11 @@ async function runStream(conversation, prompt, { appendUser }) {
   await scrollToBottom(true)
 
   const messageIndex = conversation.messages.length - 1
+  let generatedContent = ''
 
   try {
     // POST + JSON：prompt 不再出现在 URL 里
-    const res = await fetch(endpoint, {
+    const res = await httpFetch(endpoint, {
       method: 'POST',
       signal: abortController.signal,
       headers: {
@@ -651,7 +731,14 @@ async function runStream(conversation, prompt, { appendUser }) {
       body: JSON.stringify({
         userId,
         conversationId: conversation.id,
-        prompt
+        prompt,
+        weatherLocation: weatherLocation.value.trim() || null,
+        clientContext: recentApplication.value
+          ? {
+              recentApplication: recentApplication.value.label,
+              localAction
+            }
+          : null
       })
     })
 
@@ -660,67 +747,408 @@ async function runStream(conversation, prompt, { appendUser }) {
     }
 
     if (!res.body) {
-      assistantMessage.content = await res.text()
-      conversation.messages[messageIndex] = { ...assistantMessage }
-      messages.value = conversation.messages
-      return
+      generatedContent = await res.text()
+    } else {
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder('utf-8')
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        // 回复先在内存中缓存，不在语音合成完成前交给界面渲染。
+        generatedContent += decoder.decode(value, { stream: true })
+      }
+      generatedContent += decoder.decode()
     }
 
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder('utf-8')
+    const finalText = generatedContent.trim()
+    let audioBlobs = []
 
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      assistantMessage.content += decoder.decode(value, { stream: true })
-      // assistantMessage 是插入响应式数组前创建的原始对象；替换数组项才能稳定触发 Vue 更新。
-      conversation.messages[messageIndex] = { ...assistantMessage }
-      messages.value = conversation.messages
-      void scrollToBottom()
+    if (ttsEnabled.value && finalText) {
+      responseStage.value = 'synthesizing'
+      const signal = ttsAbortController?.signal || new AbortController().signal
+      try {
+        // 所有音频片段合成成功后才显示完整文字回复。
+        audioBlobs = await synthesizeMessageAudio(finalText, signal)
+      } catch (error) {
+        if (error?.name === 'AbortError') throw error
+        // 合成服务故障时仍允许用户看到回复，避免消息永久卡在加载态。
+        showToast(error?.message || '语音合成失败，已显示文字回复')
+      }
     }
 
-    assistantMessage.content += decoder.decode()
-    const finalText = assistantMessage.content.trim()
+    assistantMessage.content = generatedContent
     conversation.messages[messageIndex] = { ...assistantMessage }
     messages.value = conversation.messages
     await scrollToBottom()
 
-    // 聊天已经成功时，TTS 失败不应覆盖回复或让发送按钮继续等待；放到后台独立处理。
-    if (ttsEnabled.value && finalText) {
+    if (audioBlobs.length > 0) {
       const signal = ttsAbortController?.signal || new AbortController().signal
-      void synthesizeMessageAudio(finalText, signal)
-        .then((audioBlobs) => enqueueAudioBlobs(audioBlobs, messageIndex, signal))
-        .catch((error) => {
-          if (error?.name !== 'AbortError') {
-            showToast(error?.message || '语音合成失败')
-          }
-        })
+      enqueueAudioBlobs(audioBlobs, messageIndex, signal)
     }
   } catch (error) {
     if (error.name === 'AbortError') {
-      // 用户点了「停止」：保留已经生成的部分，不当作错误
+      // 用户主动停止时保留已经生成的部分，不再继续等待语音。
+      assistantMessage.content = generatedContent
+      conversation.messages[messageIndex] = { ...assistantMessage }
+      messages.value = conversation.messages
       return
     }
-    errorText.value = error.message || '请求失败'
-    assistantMessage.content = '请求失败，请确认后端服务已启动。'
+    const detail = error.message || '未知网络错误'
+    errorText.value = detail
+    assistantMessage.content = `请求失败：${detail}`
     conversation.messages[messageIndex] = { ...assistantMessage }
     messages.value = conversation.messages
   } finally {
     isLoading.value = false
+    responseStage.value = 'idle'
     abortController = null
     await scrollToBottom()
   }
 }
 
+async function appendLocalAssistantMessage(conversation, content) {
+  let audioBlobs = []
+  let signal = null
+
+  if (ttsEnabled.value && content.trim()) {
+    stopAllTts()
+    ttsAbortController = new AbortController()
+    signal = ttsAbortController.signal
+    try {
+      // 与普通回复保持一致：语音准备好之后才显示文字。
+      audioBlobs = await synthesizeMessageAudio(content, signal)
+    } catch (error) {
+      if (error?.name !== 'AbortError') showToast(error?.message || '语音合成失败，已显示文字回复')
+    }
+  }
+
+  conversation.messages.push({ role: 'assistant', content })
+  messages.value = conversation.messages
+  const messageIndex = conversation.messages.length - 1
+  await scrollToBottom(true)
+  if (audioBlobs.length > 0 && signal && !signal.aborted) {
+    enqueueAudioBlobs(audioBlobs, messageIndex, signal)
+  }
+}
+
+async function handleLocalApplicationCommand(prompt, command) {
+  const conversation = ensureConversation(prompt)
+  conversation.messages.push({ role: 'user', content: prompt })
+  messages.value = conversation.messages
+  await scrollToBottom(true)
+
+  if (!isDesktopRuntime()) {
+    openingApp.value = true
+    try {
+      await appendLocalAssistantMessage(conversation, '打开本地软件仅支持昔涟 AI 桌面客户端。')
+    } finally {
+      openingApp.value = false
+    }
+    return
+  }
+
+  openingApp.value = true
+  try {
+    const applications = await findLocalApplications(command.target)
+    pendingAppLaunch.value = {
+      target: command.target,
+      prompt,
+      applications,
+      selectedApplicationId: applications[0]?.id || '',
+      conversation
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    await appendLocalAssistantMessage(conversation, `搜索本机软件失败：${detail}`)
+  } finally {
+    openingApp.value = false
+  }
+}
+
+async function confirmApplicationLaunch() {
+  const pending = pendingAppLaunch.value
+  const application = selectedPendingApplication.value
+  if (!pending || !application || openingApp.value) return
+  openingApp.value = true
+
+  try {
+    await openLocalApplication(application.id)
+    recentApplication.value = application
+    pendingAppLaunch.value = null
+    openingApp.value = false
+    await runStream(pending.conversation, pending.prompt, {
+      appendUser: false,
+      localAction: 'application_opened'
+    })
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    await appendLocalAssistantMessage(
+      pending.conversation,
+      `打开${application.label}失败：${detail}`
+    )
+  } finally {
+    pendingAppLaunch.value = null
+    openingApp.value = false
+  }
+}
+
+async function cancelApplicationLaunch() {
+  const pending = pendingAppLaunch.value
+  if (!pending || openingApp.value) return
+  const applicationLabel = selectedPendingApplication.value?.label
+  pendingAppLaunch.value = null
+  openingApp.value = true
+  try {
+    await appendLocalAssistantMessage(
+      pending.conversation,
+      `已取消打开${applicationLabel || pending.target || '该软件'}。`
+    )
+  } finally {
+    openingApp.value = false
+  }
+}
+
+async function chooseApplicationFile() {
+  const pending = pendingAppLaunch.value
+  if (!pending || openingApp.value) return
+  openingApp.value = true
+  try {
+    const application = await chooseLocalApplicationFile(pending.target)
+    if (!application) return
+    pending.applications = [application]
+    pending.selectedApplicationId = application.id
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    await appendLocalAssistantMessage(pending.conversation, `添加本机软件失败：${detail}`)
+    pendingAppLaunch.value = null
+  } finally {
+    openingApp.value = false
+  }
+}
+
+/* ------------------------------------------------------ 截图理解与语音输入 */
+
+const DEFAULT_SCREENSHOT_QUESTION = '请概括当前窗口的内容，并指出值得我注意的信息。'
+
+async function openScreenshotPreview() {
+  if (!desktopRuntime || isLoading.value || openingApp.value || screenshotBusy.value) return
+
+  screenshotBusy.value = true
+  stopAllTts()
+  try {
+    const capture = await captureCurrentWindow()
+    screenshotPreview.value = capture
+    screenshotQuestion.value = DEFAULT_SCREENSHOT_QUESTION
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    showToast(detail || '当前窗口截图失败')
+  } finally {
+    screenshotBusy.value = false
+  }
+}
+
+function cancelScreenshotPreview() {
+  if (screenshotBusy.value) return
+  screenshotPreview.value = null
+  screenshotQuestion.value = ''
+}
+
+async function analyzeScreenshot() {
+  const capture = screenshotPreview.value
+  if (!capture || isLoading.value || screenshotBusy.value) return
+
+  const question = screenshotQuestion.value.trim() || DEFAULT_SCREENSHOT_QUESTION
+  const userMessage = capture.title
+    ? `查看当前窗口“${capture.title}”：${question}`
+    : `查看当前窗口：${question}`
+  const conversation = ensureConversation(userMessage)
+  const assistantMessage = { role: 'assistant', content: '' }
+
+  conversation.messages.push({ role: 'user', content: userMessage }, assistantMessage)
+  messages.value = conversation.messages
+  const messageIndex = conversation.messages.length - 1
+  screenshotPreview.value = null
+  screenshotQuestion.value = ''
+  screenshotBusy.value = true
+  isLoading.value = true
+  responseStage.value = 'analyzing'
+  errorText.value = ''
+  stopAllTts()
+  abortController = new AbortController()
+  if (ttsEnabled.value) ttsAbortController = new AbortController()
+  await scrollToBottom(true)
+
+  try {
+    const result = await analyzeWindowCapture({
+      capture,
+      question,
+      userId,
+      conversationId: conversation.id,
+      signal: abortController.signal
+    })
+    const answer = String(result?.answer || '').trim()
+    if (!answer) throw new Error('图片分析服务没有返回内容')
+
+    let audioBlobs = []
+    if (ttsEnabled.value) {
+      responseStage.value = 'synthesizing'
+      const signal = ttsAbortController?.signal || new AbortController().signal
+      try {
+        audioBlobs = await synthesizeMessageAudio(answer, signal)
+      } catch (error) {
+        if (error?.name === 'AbortError') throw error
+        showToast(error?.message || '语音合成失败，已显示文字回复')
+      }
+    }
+
+    assistantMessage.content = answer
+    conversation.messages[messageIndex] = { ...assistantMessage }
+    messages.value = conversation.messages
+    await scrollToBottom(true)
+
+    if (audioBlobs.length > 0) {
+      const signal = ttsAbortController?.signal || new AbortController().signal
+      enqueueAudioBlobs(audioBlobs, messageIndex, signal)
+    }
+  } catch (error) {
+    if (error?.name === 'AbortError') return
+    const detail = error?.message || '图片分析失败'
+    errorText.value = detail
+    assistantMessage.content = `图片分析失败：${detail}`
+    conversation.messages[messageIndex] = { ...assistantMessage }
+    messages.value = conversation.messages
+  } finally {
+    screenshotBusy.value = false
+    isLoading.value = false
+    responseStage.value = 'idle'
+    abortController = null
+    await scrollToBottom()
+  }
+}
+
+function clearVoiceMaxTimer() {
+  clearTimeout(voiceMaxTimer)
+  voiceMaxTimer = null
+}
+
+async function beginPushToTalk(event) {
+  if (event?.button !== undefined && event.button !== 0) return
+  if (
+    voiceState.value !== 'idle' ||
+    isLoading.value ||
+    openingApp.value ||
+    screenshotBusy.value
+  ) return
+  if (!isVoiceInputSupported()) {
+    showToast('当前环境不支持麦克风录音')
+    return
+  }
+
+  voicePressActive = true
+  event?.currentTarget?.setPointerCapture?.(event.pointerId)
+  voiceState.value = 'requesting'
+  stopAllTts()
+
+  try {
+    const session = await startVoiceRecording()
+    if (!voicePressActive) {
+      await session.cancel()
+      voiceState.value = 'idle'
+      return
+    }
+    voiceRecorder = session
+    voiceState.value = 'recording'
+    voiceMaxTimer = setTimeout(() => void finishPushToTalk(), 60_000)
+  } catch (error) {
+    voicePressActive = false
+    voiceState.value = 'idle'
+    const denied = error?.name === 'NotAllowedError' || error?.name === 'PermissionDeniedError'
+    showToast(denied ? '麦克风权限未开启' : error?.message || '无法开始录音')
+  }
+}
+
+async function finishPushToTalk() {
+  voicePressActive = false
+  if (voiceState.value === 'requesting') return
+  if (voiceState.value !== 'recording' || !voiceRecorder) return
+
+  const session = voiceRecorder
+  voiceRecorder = null
+  clearVoiceMaxTimer()
+  voiceState.value = 'transcribing'
+
+  try {
+    const audio = await session.stop()
+    const result = await transcribeAudio(audio)
+    const transcript = String(result?.text || '').trim()
+    if (!transcript) throw new Error('没有识别到清晰的语音')
+
+    inputText.value = transcript
+    voiceState.value = 'idle'
+    await nextTick()
+    autoGrow()
+    await sendPrompt()
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    showToast(detail || '语音识别失败')
+  } finally {
+    if (voiceState.value === 'transcribing') voiceState.value = 'idle'
+  }
+}
+
+async function cancelVoiceRecording() {
+  voicePressActive = false
+  clearVoiceMaxTimer()
+  const session = voiceRecorder
+  voiceRecorder = null
+  if (session) await session.cancel().catch(() => {})
+  voiceState.value = 'idle'
+}
+
+function onVoicePointerDown(event) {
+  void beginPushToTalk(event)
+}
+
+function onVoicePointerUp() {
+  void finishPushToTalk()
+}
+
+function onVoiceKeyDown(event) {
+  if (event.repeat || (event.key !== ' ' && event.key !== 'Enter')) return
+  event.preventDefault()
+  void beginPushToTalk()
+}
+
+function onVoiceKeyUp(event) {
+  if (event.key !== ' ' && event.key !== 'Enter') return
+  event.preventDefault()
+  void finishPushToTalk()
+}
+
 async function sendPrompt() {
   const prompt = inputText.value.trim()
-  if (!prompt || isLoading.value) return
+  if (
+    !prompt ||
+    isLoading.value ||
+    openingApp.value ||
+    screenshotBusy.value ||
+    voiceState.value !== 'idle'
+  ) return
 
-  const conversation = ensureConversation(prompt)
-  messages.value = conversation.messages
+  const localCommand = parseOpenApplicationCommand(prompt)
+
   inputText.value = ''
   await nextTick()
   autoGrow()
+
+  if (localCommand) {
+    await handleLocalApplicationCommand(prompt, localCommand)
+    return
+  }
+
+  const conversation = ensureConversation(prompt)
+  messages.value = conversation.messages
 
   await runStream(conversation, prompt, { appendUser: true })
 }
@@ -768,6 +1196,80 @@ function handleEnter(event) {
   }
 }
 
+/* ------------------------------------------------------------ 天气 */
+
+function weatherIcon(code, daytime = true) {
+  if (code === 0) return daytime ? '☀️' : '🌙'
+  if (code <= 2) return daytime ? '🌤️' : '☁️'
+  if (code === 3) return '☁️'
+  if (code === 45 || code === 48) return '🌫️'
+  if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82)) return '🌧️'
+  if ((code >= 71 && code <= 77) || (code >= 85 && code <= 86)) return '🌨️'
+  if (code >= 95) return '⛈️'
+  return '🌡️'
+}
+
+function shortDate(value, index) {
+  if (index === 0) return '今天'
+  if (index === 1) return '明天'
+  const parts = String(value || '').split('-')
+  return parts.length === 3 ? `${Number(parts[1])}/${Number(parts[2])}` : value
+}
+
+async function fetchWeather(params) {
+  weatherLoading.value = true
+  weatherError.value = ''
+  try {
+    const query = new URLSearchParams(params)
+    const res = await httpFetch(apiUrl(`/api/weather?${query}`))
+    if (!res.ok) throw new Error(await readErrorMessage(res))
+    const data = await res.json()
+    weatherData.value = data
+    weatherLocation.value = String(data.location || '').trim()
+    if (weatherLocation.value) {
+      localStorage.setItem(weatherLocationKey, weatherLocation.value)
+    }
+  } catch (error) {
+    weatherError.value = error.message || '天气查询失败，请稍后重试'
+  } finally {
+    weatherLoading.value = false
+  }
+}
+
+async function searchWeather() {
+  const city = weatherCity.value.trim()
+  if (!city || weatherLoading.value) return
+  localStorage.setItem(weatherCityKey, city)
+  await fetchWeather({ city })
+}
+
+function locateWeather() {
+  if (weatherLoading.value) return
+  if (!navigator.geolocation) {
+    weatherError.value = '当前浏览器不支持定位，请输入城市查询'
+    return
+  }
+  weatherLoading.value = true
+  weatherError.value = ''
+  navigator.geolocation.getCurrentPosition(
+    (position) => {
+      const latitude = position.coords.latitude.toFixed(4)
+      const longitude = position.coords.longitude.toFixed(4)
+      void fetchWeather({ latitude, longitude })
+    },
+    (error) => {
+      weatherLoading.value = false
+      weatherError.value = error.code === 1 ? '定位权限未开启，请输入城市查询' : '暂时无法获取位置，请输入城市查询'
+    },
+    { enableHighAccuracy: false, timeout: 10000, maximumAge: 10 * 60 * 1000 }
+  )
+}
+
+function toggleWeather() {
+  weatherOpen.value = !weatherOpen.value
+  if (weatherOpen.value && !weatherData.value && weatherCity.value.trim()) void searchWeather()
+}
+
 /* ------------------------------------------------------------ 其它交互 */
 
 function autoGrow() {
@@ -786,7 +1288,15 @@ function closeSidebar() {
 }
 
 function onKeydown(event) {
-  if (event.key === 'Escape') closeSidebar()
+  if (event.key === 'Escape') {
+    closeSidebar()
+    weatherOpen.value = false
+    if (!openingApp.value) pendingAppLaunch.value = null
+    cancelScreenshotPreview()
+    if (voiceState.value === 'recording' || voiceState.value === 'requesting') {
+      void cancelVoiceRecording()
+    }
+  }
 }
 
 watch(inputText, () => nextTick(autoGrow))
@@ -811,6 +1321,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)
   window.removeEventListener('scroll', onScroll)
   clearTimeout(toastTimer)
+  void cancelVoiceRecording()
   stopRequest()
   stopAllTts()
 })
@@ -905,6 +1416,36 @@ onBeforeUnmount(() => {
 
         <div class="header-actions">
           <button
+            v-if="desktopRuntime"
+            class="icon-btn"
+            :class="{ on: !!screenshotPreview }"
+            type="button"
+            :disabled="isLoading || openingApp || screenshotBusy || voiceState !== 'idle'"
+            title="截图并分析当前窗口"
+            aria-label="截图并分析当前窗口"
+            @click="openScreenshotPreview"
+          >
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 7.5h3l1.3-2h7.4l1.3 2h3a2 2 0 0 1 2 2v8.5a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9.5a2 2 0 0 1 2-2Z" />
+              <circle cx="12" cy="13" r="3.4" />
+            </svg>
+          </button>
+
+          <button
+            class="icon-btn"
+            :class="{ on: weatherOpen }"
+            type="button"
+            title="查询当地天气"
+            aria-label="查询当地天气"
+            @click="toggleWeather"
+          >
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M8 18h9.5a3.5 3.5 0 0 0 .6-6.95A6.5 6.5 0 0 0 5.7 9.6 4.25 4.25 0 0 0 8 18Z" />
+              <path d="M8.6 6.4 7.2 5M13 4V2M4 10H2" />
+            </svg>
+          </button>
+
+          <button
             class="icon-btn"
             type="button"
             :title="theme === 'dark' ? '切换到浅色主题' : '切换到深色主题'"
@@ -936,6 +1477,59 @@ onBeforeUnmount(() => {
             </svg>
           </button>
         </div>
+
+        <section v-if="weatherOpen" class="weather-panel" aria-label="当地天气">
+          <div class="weather-panel-head">
+            <div>
+              <strong>当地天气</strong>
+              <span>天气数据由 <a href="https://open-meteo.com/" target="_blank" rel="noreferrer">Open-Meteo</a> 提供</span>
+            </div>
+            <button class="weather-close" type="button" aria-label="关闭天气面板" @click="weatherOpen = false">×</button>
+          </div>
+
+          <form class="weather-search" @submit.prevent="searchWeather">
+            <input v-model="weatherCity" type="search" maxlength="100" placeholder="输入城市，如：杭州" aria-label="城市名称" />
+            <button type="submit" :disabled="weatherLoading || !weatherCity.trim()">查询</button>
+          </form>
+          <button class="weather-locate" type="button" :disabled="weatherLoading" @click="locateWeather">
+            <span aria-hidden="true">⌖</span> 使用我的位置
+          </button>
+
+          <div v-if="weatherLoading" class="weather-status">正在查询最新天气…</div>
+          <div v-else-if="weatherError" class="weather-error">{{ weatherError }}</div>
+
+          <template v-else-if="weatherData">
+            <div class="weather-current">
+              <span class="weather-symbol">{{ weatherIcon(weatherData.current.weatherCode, weatherData.current.daytime) }}</span>
+              <div class="weather-temperature">{{ Math.round(weatherData.current.temperature) }}°</div>
+              <div class="weather-current-copy">
+                <strong>{{ weatherData.location }}</strong>
+                <span>{{ weatherData.current.condition }} · 体感 {{ Math.round(weatherData.current.apparentTemperature) }}°</span>
+              </div>
+            </div>
+
+            <div class="weather-metrics">
+              <span>湿度 {{ weatherData.current.humidity }}%</span>
+              <span>风速 {{ Math.round(weatherData.current.windSpeed) }} km/h</span>
+              <span>降水 {{ weatherData.current.precipitation }} mm</span>
+            </div>
+
+            <div class="weather-forecast">
+              <div v-for="(day, index) in weatherData.forecast" :key="day.date" class="weather-day">
+                <span>{{ shortDate(day.date, index) }}</span>
+                <b>{{ weatherIcon(day.weatherCode) }} {{ Math.round(day.maxTemperature) }}° / {{ Math.round(day.minTemperature) }}°</b>
+                <small>降水 {{ day.precipitationProbability }}%</small>
+              </div>
+            </div>
+
+            <div class="weather-advice">
+              <strong>今日建议</strong>
+              <ul>
+                <li v-for="item in weatherData.advice" :key="item">{{ item }}</li>
+              </ul>
+            </div>
+          </template>
+        </section>
       </header>
 
       <section class="chat-body" @click="onBodyClick">
@@ -978,7 +1572,7 @@ onBeforeUnmount(() => {
                   class="typing"
                 >
                   <span class="typing-dots"><i></i><i></i><i></i></span>
-                  {{ isLoading ? '正在生成…' : '没有返回内容' }}
+                  {{ isLoading ? '昔涟正在思考' : '没有返回内容' }}
                 </span>
                 <template v-else-if="message.role === 'assistant'">
                   <div
@@ -1061,7 +1655,7 @@ onBeforeUnmount(() => {
               @keydown.enter="handleEnter"
             ></textarea>
             <div class="composer-meta">
-              <span>Enter 发送 · Shift + Enter 换行</span>
+              <span>{{ voiceState === 'recording' ? '正在录音，松开发送' : 'Enter 发送 · Shift + Enter 换行' }}</span>
               <span
                 v-if="inputText.length > 2500"
                 class="char-count"
@@ -1072,7 +1666,32 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <button v-if="isLoading" class="send stop" type="button" title="停止生成" @click="stopRequest">
+          <button
+            class="voice-button"
+            :class="{ recording: voiceState === 'recording', busy: voiceState === 'requesting' || voiceState === 'transcribing' }"
+            type="button"
+            :disabled="isLoading || openingApp || screenshotBusy || voiceState === 'transcribing'"
+            :title="voiceButtonTitle"
+            :aria-label="voiceButtonTitle"
+            @pointerdown.prevent="onVoicePointerDown"
+            @pointerup.prevent="onVoicePointerUp"
+            @pointercancel.prevent="cancelVoiceRecording"
+            @keydown="onVoiceKeyDown"
+            @keyup="onVoiceKeyUp"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="8" y="3" width="8" height="12" rx="4" />
+              <path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6" />
+            </svg>
+          </button>
+
+          <button
+            v-if="isLoading"
+            class="send stop"
+            type="button"
+            :title="responseStage === 'synthesizing' ? '停止语音合成并显示回复' : '停止生成'"
+            @click="stopRequest"
+          >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
               <rect x="6" y="6" width="12" height="12" rx="2.5" />
             </svg>
@@ -1085,6 +1704,91 @@ onBeforeUnmount(() => {
         </form>
       </div>
     </main>
+
+    <div
+      v-if="pendingAppLaunch"
+      class="command-overlay"
+      role="presentation"
+      @click.self="cancelApplicationLaunch"
+    >
+      <section class="command-dialog" role="dialog" aria-modal="true" aria-labelledby="command-title">
+        <div class="command-app-icon" aria-hidden="true">
+          {{ selectedPendingApplication?.icon || '🔎' }}
+        </div>
+        <div class="command-copy">
+          <h2 v-if="selectedPendingApplication" id="command-title">
+            打开{{ selectedPendingApplication.label }}？
+          </h2>
+          <h2 v-else id="command-title">未找到“{{ pendingAppLaunch.target }}”</h2>
+          <p v-if="selectedPendingApplication">
+            来源：{{ selectedPendingApplication.sourceLabel }}。确认后将在你的电脑上启动该软件。
+          </p>
+          <p v-else>可以手动选择它的 .exe 文件或开始菜单快捷方式，客户端会记住这台电脑上的位置。</p>
+        </div>
+
+        <label v-if="pendingAppLaunch.applications.length > 1" class="command-picker">
+          <span>发现多个匹配项</span>
+          <select v-model="pendingAppLaunch.selectedApplicationId" :disabled="openingApp">
+            <option
+              v-for="application in pendingAppLaunch.applications"
+              :key="application.id"
+              :value="application.id"
+            >
+              {{ application.label }}（{{ application.sourceLabel }}）
+            </option>
+          </select>
+        </label>
+
+        <div class="command-actions">
+          <button type="button" class="command-cancel" :disabled="openingApp" @click="cancelApplicationLaunch">
+            取消
+          </button>
+          <button type="button" class="command-browse" :disabled="openingApp" @click="chooseApplicationFile">
+            {{ openingApp ? '处理中…' : '手动选择' }}
+          </button>
+          <button
+            v-if="selectedPendingApplication"
+            type="button"
+            class="command-confirm"
+            :disabled="openingApp"
+            @click="confirmApplicationLaunch"
+          >
+            {{ openingApp ? '正在打开…' : '确认打开' }}
+          </button>
+        </div>
+      </section>
+    </div>
+
+    <div
+      v-if="screenshotPreview"
+      class="command-overlay"
+      role="presentation"
+      @click.self="cancelScreenshotPreview"
+    >
+      <section class="command-dialog vision-dialog" role="dialog" aria-modal="true" aria-labelledby="vision-title">
+        <div class="vision-heading">
+          <div>
+            <h2 id="vision-title">确认发送这张窗口截图？</h2>
+            <p>{{ screenshotPreview.title || '未命名窗口' }} · {{ screenshotPreview.width }} × {{ screenshotPreview.height }}</p>
+          </div>
+          <button type="button" class="vision-close" aria-label="关闭" @click="cancelScreenshotPreview">×</button>
+        </div>
+
+        <img class="vision-preview" :src="screenshotPreview.imageData" alt="待分析的当前窗口截图" />
+
+        <label class="vision-question">
+          <span>你想让 AI 看什么？</span>
+          <textarea v-model="screenshotQuestion" rows="3" maxlength="1000"></textarea>
+        </label>
+        <p class="vision-privacy">截图只会在你确认后上传。发送前请检查是否包含密码、密钥或其他敏感信息。</p>
+
+        <div class="command-actions">
+          <button type="button" class="command-cancel" @click="cancelScreenshotPreview">取消</button>
+          <button type="button" class="command-browse" @click="openScreenshotPreview">重新截图</button>
+          <button type="button" class="command-confirm" @click="analyzeScreenshot">发送并分析</button>
+        </div>
+      </section>
+    </div>
 
     <div class="toast" :class="{ show: !!toast }" aria-live="polite">{{ toast }}</div>
   </div>

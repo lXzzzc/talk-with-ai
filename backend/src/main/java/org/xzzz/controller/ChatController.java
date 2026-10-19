@@ -25,12 +25,14 @@ public class ChatController {
      */
     @PostMapping(value = "/chat", produces = "text/html; charset=utf-8")
     public Flux<String> chatPost(@RequestBody ChatRequest request) {
-        return xiLianChatService.chat(request.userId(), request.conversationId(), request.prompt());
+        return xiLianChatService.chat(request.userId(), request.conversationId(), request.prompt(),
+                request.weatherLocation(), request.clientContext());
     }
 
     @PostMapping(value = "/chat-stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<ServerSentEvent<String>> chatStreamPost(@RequestBody ChatRequest request) {
-        return toSse(xiLianChatService.chat(request.userId(), request.conversationId(), request.prompt()));
+        return toSse(xiLianChatService.chat(request.userId(), request.conversationId(), request.prompt(),
+                request.weatherLocation(), request.clientContext()));
     }
 
     /**
@@ -41,16 +43,18 @@ public class ChatController {
     public Flux<String> chat(
             @RequestParam(defaultValue = "default") String userId,
             @RequestParam String prompt,
-            @RequestParam(defaultValue = "default") String conversationId) {
-        return xiLianChatService.chat(userId, conversationId, prompt);
+            @RequestParam(defaultValue = "default") String conversationId,
+            @RequestParam(required = false) String weatherLocation) {
+        return xiLianChatService.chat(userId, conversationId, prompt, weatherLocation);
     }
 
     @GetMapping(value = "/chat-stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<ServerSentEvent<String>> chatStream(
             @RequestParam(defaultValue = "default") String userId,
             @RequestParam String prompt,
-            @RequestParam(defaultValue = "default") String conversationId) {
-        return toSse(xiLianChatService.chat(userId, conversationId, prompt));
+            @RequestParam(defaultValue = "default") String conversationId,
+            @RequestParam(required = false) String weatherLocation) {
+        return toSse(xiLianChatService.chat(userId, conversationId, prompt, weatherLocation));
     }
 
     private Flux<ServerSentEvent<String>> toSse(Flux<String> chunks) {

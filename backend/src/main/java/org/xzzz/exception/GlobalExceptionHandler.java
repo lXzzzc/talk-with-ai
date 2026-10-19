@@ -46,6 +46,19 @@ public class GlobalExceptionHandler {
         return build(HttpStatus.BAD_GATEWAY, e.getMessage(), request);
     }
 
+    @ExceptionHandler(ModelStudioException.class)
+    public ResponseEntity<ApiErrorResponse> handleModelStudio(ModelStudioException e,
+                                                               HttpServletRequest request) {
+        log.warn("多模态服务调用失败 {}: {}", request.getRequestURI(), e.getMessage());
+        return build(HttpStatus.BAD_GATEWAY, e.getMessage(), request);
+    }
+
+    @ExceptionHandler(WeatherException.class)
+    public ResponseEntity<ApiErrorResponse> handleWeather(WeatherException e, HttpServletRequest request) {
+        log.warn("天气查询失败 {}: {}", request.getRequestURI(), e.getMessage(), e);
+        return build(HttpStatus.BAD_GATEWAY, e.getMessage(), request);
+    }
+
     /** 请求体不是合法 JSON。原始异常信息很长，这里给一句干净的提示。 */
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ResponseEntity<ApiErrorResponse> handleUnreadableBody(HttpMessageNotReadableException e,
