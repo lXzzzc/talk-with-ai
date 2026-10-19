@@ -3,7 +3,10 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { apiUrl } from './api.js'
+import { openVoiceCallWindow, VOICE_CHANNEL, VOICE_CONTEXT_KEY } from './voiceCallWindow.js'
 import { httpFetch } from './http.js'
+import { withUserId } from './httpRouting.js'
+import ConfirmDeleteDialog from './ConfirmDeleteDialog.vue'
 import {
   chooseLocalApplicationFile,
   findLocalApplications,
@@ -87,6 +90,17 @@ const screenshotPreview = ref(null)
 const screenshotQuestion = ref('')
 const screenshotBusy = ref(false)
 const voiceState = ref('idle')
+const voiceCallActive = ref(false)
+const voiceCallConversationId = ref('')
+const pendingDeleteConversation = ref(null)
+const deletingConversation = ref(false)
+const deleteError = ref('')
+const historyError = ref('')
+const historyLoading = ref(false)
+let historySelection = 0
+let voiceChannel = null
+let voiceHeartbeatTimer = null
+let lastVoiceHeartbeat = 0
 
 const suggestions = [
   { icon: '✨', title: '随便聊聊', text: '今天有什么值得开心的小事？' },
@@ -142,8 +156,52 @@ const canSend = computed(
     !isLoading.value &&
     !openingApp.value &&
     !screenshotBusy.value &&
+    !voiceCallActive.value &&
     voiceState.value === 'idle'
 )
+
+function publishVoiceContext() {
+  if (!voiceCallConversationId.value) return
+  localStorage.setItem(VOICE_CONTEXT_KEY, JSON.stringify({
+    userId, conversationId: voiceCallConversationId.value,
+    weatherLocation: weatherLocation.value.trim() || null,
+    clientContext: recentApplication.value ? { recentApplication: recentApplication.value.label } : null
+  }))
+  voiceChannel?.postMessage({ type: 'voice.context', userId })
+}
+
+async function startRealtimeCall() {
+  if (isLoading.value || screenshotBusy.value || openingApp.value || voiceState.value !== 'idle') return
+  stopAllTts()
+  const conversation = conversations.value.find(item => item.id === voiceCallConversationId.value)
+    || ensureConversation('与昔涟语音通话')
+  voiceCallConversationId.value = conversation.id
+  publishVoiceContext()
+  try {
+    await openVoiceCallWindow(JSON.parse(localStorage.getItem(VOICE_CONTEXT_KEY)))
+  } catch (error) {
+    showToast(error.message || '无法打开通话窗口')
+  }
+}
+
+async function onVoiceWindowMessage({ data }) {
+  if (!data || data.userId !== userId) return
+  if (data.type === 'voice.status') {
+    lastVoiceHeartbeat = Date.now()
+    voiceCallActive.value = Boolean(data.active)
+    voiceCallConversationId.value = data.windowOpen ? data.conversationId : ''
+  }
+  if (data.type !== 'voice.history' || isLoading.value) return
+  const conversation = conversations.value.find(item => item.id === data.conversationId)
+  if (!conversation) return
+  try {
+    const response = await httpFetch(withUser(`/api/chat/${encodeURIComponent(conversation.id)}`))
+    if (!response.ok) return
+    const rows = await response.json()
+    conversation.messages = rows.map(row => ({ role: row.role, content: row.content }))
+    if (activeConversationId.value === conversation.id) messages.value = conversation.messages
+  } catch { /* 通话结束后仍可通过会话切换重新加载。 */ }
+}
 
 const voiceButtonTitle = computed(() => {
   if (voiceState.value === 'recording') return '松开并发送'
@@ -155,9 +213,7 @@ const voiceButtonTitle = computed(() => {
 
 
 function withUser(url) {
-  const target = new URL(apiUrl(url), window.location.origin)
-  target.searchParams.set('userId', userId)
-  return target.toString()
+  return withUserId(apiUrl(url), userId, window.location.origin)
 }
 
 async function readErrorMessage(res) {
@@ -328,11 +384,13 @@ function loadConversations() {
 
 // 会话列表以数据库为准；localStorage 只作兼容，用来保留「还没发过消息、因而尚未入库」的新对话。
 async function fetchConversations() {
+  historyLoading.value = true
+  historyError.value = ''
   try {
     const res = await httpFetch(withUser(historyListEndpoint))
-    if (!res.ok) return []
+    if (!res.ok) throw new Error(await readErrorMessage(res))
     const data = await res.json()
-    if (!Array.isArray(data)) return []
+    if (!Array.isArray(data)) throw new Error('服务器返回的会话列表格式无效')
     return data
       .filter((item) => item?.sessionId)
       .map((item) => ({
@@ -340,9 +398,22 @@ async function fetchConversations() {
         title: (item.title || '').trim() || item.sessionId,
         messages: []
       }))
-  } catch {
+  } catch (error) {
+    historyError.value = `会话列表加载失败：${error?.message || String(error)}`
     return []
+  } finally {
+    historyLoading.value = false
   }
+}
+
+async function retryHistory() {
+  if (historyLoading.value) return
+  const remote = await fetchConversations()
+  if (historyError.value) return
+  conversations.value = mergeConversations(remote, conversations.value)
+  const conversation = conversations.value.find(item => item.id === activeConversationId.value)
+    || conversations.value[0]
+  if (conversation) await selectConversation(conversation)
 }
 
 function mergeConversations(remote, local) {
@@ -357,6 +428,7 @@ function mergeConversations(remote, local) {
 }
 
 function newChat() {
+  historySelection++
   stopRequest()
   stopAllTts()
   pendingAppLaunch.value = null
@@ -372,6 +444,7 @@ function newChat() {
 }
 
 async function selectConversation(conversation) {
+  const selection = ++historySelection
   stopRequest()
   stopAllTts()
   closeSidebar()
@@ -387,10 +460,18 @@ async function selectConversation(conversation) {
 
   try {
     const res = await httpFetch(withUser(`/api/${chatType}/${encodeURIComponent(conversation.id)}`))
+    if (selection !== historySelection) return
+    // 本地保留的未发送会话还没有服务端记录，不应当作为网络故障显示。
+    if (res.status === 404) {
+      conversation.messages = []
+      messages.value = []
+      return
+    }
     if (!res.ok) {
       throw new Error(await readErrorMessage(res))
     }
     const data = await res.json()
+    if (selection !== historySelection) return
     conversation.messages = Array.isArray(data)
       ? data
           .filter((item) => item?.role && item?.content)
@@ -402,12 +483,24 @@ async function selectConversation(conversation) {
     messages.value = conversation.messages
     await scrollToBottom(true)
   } catch (error) {
-    errorText.value = error.message || '加载历史失败'
+    if (selection === historySelection) errorText.value = `加载历史失败：${error?.message || String(error)}`
   }
 }
 
-async function removeConversation(conversation) {
-  if (!window.confirm(`确定删除会话「${conversation.title}」？删除后无法恢复。`)) return
+function requestDeleteConversation(conversation) {
+  if (voiceCallActive.value && conversation.id === voiceCallConversationId.value) {
+    showToast('请先结束这个对话的语音通话')
+    return
+  }
+  deleteError.value = ''
+  pendingDeleteConversation.value = conversation
+}
+
+async function removeConversation() {
+  const conversation = pendingDeleteConversation.value
+  if (!conversation || deletingConversation.value) return
+  deletingConversation.value = true
+  deleteError.value = ''
 
   try {
     const res = await httpFetch(withUser(`/api/${chatType}/${encodeURIComponent(conversation.id)}`), {
@@ -419,6 +512,8 @@ async function removeConversation(conversation) {
     }
     conversations.value = conversations.value.filter((item) => item.id !== conversation.id)
     saveConversations()
+    pendingDeleteConversation.value = null
+    showToast('对话已删除')
 
     if (activeConversationId.value === conversation.id) {
       if (conversations.value.length > 0) {
@@ -428,7 +523,9 @@ async function removeConversation(conversation) {
       }
     }
   } catch (error) {
-    errorText.value = error.message || '删除会话失败'
+    deleteError.value = `删除会话失败：${error?.message || String(error)}`
+  } finally {
+    deletingConversation.value = false
   }
 }
 
@@ -680,6 +777,7 @@ function flushTtsTail(messageIndex, content) {
 
 /** 手动朗读整条回复。 */
 function speakMessage(index, message) {
+  if (voiceCallActive.value) return
   const text = (message.content || '').trim()
   if (!text) return
   stopAllTts()
@@ -1038,7 +1136,8 @@ async function beginPushToTalk(event) {
     voiceState.value !== 'idle' ||
     isLoading.value ||
     openingApp.value ||
-    screenshotBusy.value
+    screenshotBusy.value ||
+    voiceCallActive.value
   ) return
   if (!isVoiceInputSupported()) {
     showToast('当前环境不支持麦克风录音')
@@ -1130,6 +1229,7 @@ async function sendPrompt() {
   const prompt = inputText.value.trim()
   if (
     !prompt ||
+    voiceCallActive.value ||
     isLoading.value ||
     openingApp.value ||
     screenshotBusy.value ||
@@ -1160,7 +1260,7 @@ async function sendPrompt() {
  * 因此刷新页面向数据库回读历史时会看到两条回复。
  */
 async function regenerate(index) {
-  if (isLoading.value) return
+  if (isLoading.value || voiceCallActive.value) return
   const conversation = activeConversation.value
   if (!conversation) return
 
@@ -1300,11 +1400,19 @@ function onKeydown(event) {
 }
 
 watch(inputText, () => nextTick(autoGrow))
+watch([weatherLocation, recentApplication], publishVoiceContext)
 
 onMounted(async () => {
   document.documentElement.dataset.theme = theme.value
   window.addEventListener('keydown', onKeydown)
   window.addEventListener('scroll', onScroll, { passive: true })
+  if (globalThis.BroadcastChannel) {
+    voiceChannel = new BroadcastChannel(VOICE_CHANNEL)
+    voiceChannel.onmessage = onVoiceWindowMessage
+    voiceHeartbeatTimer = setInterval(() => {
+      if (voiceCallActive.value && Date.now() - lastVoiceHeartbeat > 6500) voiceCallActive.value = false
+    }, 2000)
+  }
 
   const local = loadConversations()
   const remote = await fetchConversations()
@@ -1321,6 +1429,8 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)
   window.removeEventListener('scroll', onScroll)
   clearTimeout(toastTimer)
+  clearInterval(voiceHeartbeatTimer)
+  voiceChannel?.close()
   void cancelVoiceRecording()
   stopRequest()
   stopAllTts()
@@ -1354,6 +1464,11 @@ onBeforeUnmount(() => {
         <span v-if="conversations.length" class="history-count">{{ conversations.length }}</span>
       </div>
 
+      <div v-if="historyLoading" class="history-status" role="status">正在加载历史会话…</div>
+      <div v-else-if="historyError" class="history-status history-load-error" role="alert">
+        <span>{{ historyError }}</span><button type="button" @click="retryHistory">重试</button>
+      </div>
+
       <div class="history-list">
         <div
           v-for="conversation in conversations"
@@ -1382,7 +1497,7 @@ onBeforeUnmount(() => {
                   <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
                 </svg>
               </button>
-              <button class="icon-mini danger" type="button" title="删除" @click.stop="removeConversation(conversation)">
+              <button class="icon-mini danger" type="button" title="删除" @click.stop="requestDeleteConversation(conversation)">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6" />
                 </svg>
@@ -1415,12 +1530,19 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="header-actions">
+          <button class="icon-btn" :class="{ on: voiceCallActive }" type="button"
+            :disabled="isLoading || openingApp || screenshotBusy || voiceState !== 'idle'"
+            title="实时语音通话" aria-label="实时语音通话" @click="startRealtimeCall">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M22 16.9V20a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2 4.2 2 2 0 0 1 4 2h3a2 2 0 0 1 2 1.7c.1 1 .4 2 .7 2.9a2 2 0 0 1-.5 2.1L8 10a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.5c.9.3 1.9.6 2.9.7a2 2 0 0 1 1.7 2Z"/>
+            </svg>
+          </button>
           <button
             v-if="desktopRuntime"
             class="icon-btn"
             :class="{ on: !!screenshotPreview }"
             type="button"
-            :disabled="isLoading || openingApp || screenshotBusy || voiceState !== 'idle'"
+            :disabled="isLoading || openingApp || screenshotBusy || voiceCallActive || voiceState !== 'idle'"
             title="截图并分析当前窗口"
             aria-label="截图并分析当前窗口"
             @click="openScreenshotPreview"
@@ -1670,7 +1792,7 @@ onBeforeUnmount(() => {
             class="voice-button"
             :class="{ recording: voiceState === 'recording', busy: voiceState === 'requesting' || voiceState === 'transcribing' }"
             type="button"
-            :disabled="isLoading || openingApp || screenshotBusy || voiceState === 'transcribing'"
+            :disabled="isLoading || openingApp || screenshotBusy || voiceCallActive || voiceState === 'transcribing'"
             :title="voiceButtonTitle"
             :aria-label="voiceButtonTitle"
             @pointerdown.prevent="onVoicePointerDown"
@@ -1789,6 +1911,10 @@ onBeforeUnmount(() => {
         </div>
       </section>
     </div>
+
+    <ConfirmDeleteDialog v-if="pendingDeleteConversation" :title="pendingDeleteConversation.title"
+      :busy="deletingConversation" :error="deleteError" @confirm="removeConversation"
+      @cancel="pendingDeleteConversation = null" />
 
     <div class="toast" :class="{ show: !!toast }" aria-live="polite">{{ toast }}</div>
   </div>

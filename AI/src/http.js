@@ -1,5 +1,6 @@
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
 import { isDesktopRuntime } from './runtime.js'
+import { shouldUseNativeHttp } from './httpRouting.js'
 
 /**
  * Use Tauri's Rust HTTP client for packaged desktop requests. It is not subject
@@ -8,9 +9,7 @@ import { isDesktopRuntime } from './runtime.js'
  */
 export async function httpFetch(input, init = {}) {
   const rawUrl = input instanceof Request ? input.url : String(input)
-  const isAbsoluteHttpUrl = /^https?:\/\//i.test(rawUrl)
-
-  if (isDesktopRuntime() && isAbsoluteHttpUrl) {
+  if (shouldUseNativeHttp(rawUrl, isDesktopRuntime(), globalThis.location?.origin)) {
     const headers = new Headers(init.headers)
     // WebView2 may attach `http://tauri.localhost` as the Origin even though the
     // request is sent by the native plugin. Spring then rejects it before the

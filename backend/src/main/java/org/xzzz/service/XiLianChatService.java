@@ -48,6 +48,17 @@ public class XiLianChatService {
             String weatherLocation,
             ClientContext clientContext
     ) {
+        return generate(userId, sessionId, prompt, weatherLocation, clientContext, false);
+    }
+
+    /** 语音回复由通话链路在确认播放后入库，未听到的回复不进入后续记忆。 */
+    public Flux<String> chatForVoice(String userId, String sessionId, String prompt,
+                                     String weatherLocation, ClientContext clientContext) {
+        return generate(userId, sessionId, prompt, weatherLocation, clientContext, true);
+    }
+
+    private Flux<String> generate(String userId, String sessionId, String prompt,
+                                   String weatherLocation, ClientContext clientContext, boolean voice) {
         validate(userId, sessionId, prompt);
         String normalizedWeatherLocation = normalizeWeatherLocation(weatherLocation);
         ClientContext normalizedClientContext = normalizeClientContext(clientContext);
@@ -61,6 +72,12 @@ public class XiLianChatService {
                 .toList();
         List<Message> requestMessages = withWeatherLocation(historyMessages, normalizedWeatherLocation);
         requestMessages = withClientContext(requestMessages, normalizedClientContext);
+        if (voice) {
+            requestMessages = new ArrayList<>(requestMessages);
+            requestMessages.addFirst(new SystemMessage("当前为实时语音通话。保持昔涟的人设，用自然口语回答，"
+                    + "通常一到三句，优先简短完整句。不要写动作旁白、括号描写、Markdown、列表或代码。"
+                    + "需要查询天气时仍调用天气工具，不要编造数据。"));
+        }
 
         StringBuilder assistantContent = new StringBuilder();
 
@@ -69,7 +86,9 @@ public class XiLianChatService {
                 .stream()
                 .content()
                 .doOnNext(assistantContent::append)
-                .doOnComplete(() -> saveAssistantMessage(userId, sessionId, assistantContent.toString()));
+                .doOnComplete(() -> {
+                    if (!voice) saveAssistantMessage(userId, sessionId, assistantContent.toString());
+                });
     }
 
     static List<Message> withWeatherLocation(List<Message> historyMessages, String weatherLocation) {

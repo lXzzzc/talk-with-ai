@@ -95,6 +95,12 @@ vision:
     # deepseek-flash 当前指向最新的 DeepSeek V4.1 Flash，并支持图片输入。
     model: ${VISION_DEEPSEEK_MODEL:deepseek-flash}
 
+voice:
+  # 留空时自动沿用百炼 Chat URL 的业务空间域名。
+  asr-url: ${VOICE_ASR_URL:}
+  asr-model: ${VOICE_ASR_MODEL:qwen3-asr-flash-realtime}
+  allowed-origins: ${VOICE_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173,http://tauri.localhost,tauri://localhost}
+
 weather:
   geocoding-url: ${WEATHER_GEOCODING_URL:https://geocoding-api.open-meteo.com/v1/search}
   forecast-url: ${WEATHER_FORECAST_URL:https://api.open-meteo.com/v1/forecast}

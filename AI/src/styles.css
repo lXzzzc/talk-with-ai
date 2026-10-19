@@ -4,6 +4,11 @@
    所有颜色/圆角/阴影都由 CSS 变量驱动，改主题只需要改变量。
    ========================================================================= */
 
+.history-status { margin: 0 14px 10px; font-size: 11px; color: var(--text-muted); line-height: 1.6; }
+.history-load-error { display: flex; align-items: center; gap: 6px; color: #d98299; }
+.history-load-error span { min-width: 0; overflow-wrap: anywhere; }
+.history-load-error button { flex-shrink: 0; border: 1px solid var(--border); color: var(--text); background: var(--surface); border-radius: 6px; padding: 3px 7px; cursor: pointer; }
+
 :root {
   color-scheme: dark;
 

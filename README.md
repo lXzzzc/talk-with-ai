@@ -311,6 +311,32 @@ npm run desktop:build
 服务端使用，不会进入前端或安装包。Nginx 需要将 `client_max_body_size` 设为至少 `12m`，
 仓库中的部署配置已经包含该限制。
 
+### 实时语音通话（本地）
+
+聊天页右上角的电话按钮会打开独立通话窗口，点击“开始通话”后使用麦克风。
+支持实时字幕、停顿自动回答、边合成边播放、说话或按钮打断、静音和再次拨打。
+桌面端是独立系统窗口；浏览器版使用弹出窗口，需允许该站点弹窗。
+关闭通话窗口或挂断会释放麦克风、识别连接和当前生成任务。默认不保存原始录音；
+只有播放器确认播放完的句子进入后续聊天记忆，打断的回复会有标记。
+
+后端使用已有 `DASHSCOPE_API_KEY` 调用 `qwen3-asr-flash-realtime`，
+沿用 DeepSeek、人设、天气地点与 Voice Studio 音色，仍需联网。
+`VOICE_ASR_URL` 留空时沿用 `DASHSCOPE_CHAT_URL` 的业务空间域名；
+也可以显式配置不带查询参数的 `wss://.../api-ws/v1/realtime`。
+本地入口是 `/voice/realtime`，Vite 的 `/api` 代理已经开启 WebSocket 转发。
+默认只接受本机开发和 Tauri 来源，并限制并发、音频速率和通话时长。
+
+同时启动本地后端后，桌面本地调试使用：
+
+```powershell
+cd AI
+npm run desktop:dev -- --local
+```
+
+该模式通过本机 Vite 访问 `localhost:8080`，不要另外重复启动占用 5173 的 Vite 进程。
+若将来部署公网，需要为 Nginx 配置 WebSocket Upgrade 转发、HTTPS/WSS、
+实际站点的 `VOICE_ALLOWED_ORIGINS`，并接入真实用户鉴权；当前改动仅在本机运行验证。
+
 ### 桌面端服务器连接
 
 桌面构建会把 `TALK_AI_DESKTOP_API_URL` 注入为 API 根地址。跨域请求通过 Tauri 原生 HTTP

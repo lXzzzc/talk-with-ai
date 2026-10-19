@@ -4,6 +4,8 @@ import com.convai.voice.sdk.AudioFormat;
 import com.convai.voice.sdk.SynthesisAudio;
 import com.convai.voice.sdk.SynthesisOptions;
 import com.convai.voice.sdk.realtime.VoiceRealtimeClient;
+import com.convai.voice.sdk.realtime.SynthesisListener;
+import com.convai.voice.sdk.realtime.SynthesisSession;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -60,6 +62,13 @@ public class TtsService {
     @PreDestroy
     public void shutdown() {
         client.close();
+    }
+
+    /** 通话使用裸 PCM 分片，避免等待完整 WAV；每轮由调用者关闭独立会话。 */
+    public SynthesisSession openStreamingSession(SynthesisListener listener) {
+        return client.newSession(SynthesisOptions.builder()
+                .voice(voiceId).format(AudioFormat.PCM).sampleRate(24000)
+                .rate(rate).pitch(pitch).build(), listener);
     }
 
     public byte[] synthesize(String text) {
