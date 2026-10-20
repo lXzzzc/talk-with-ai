@@ -10,8 +10,9 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
-    "test": "npm run build && node --test dist/policy.test.js dist/mcp.test.js",
+    "test": "npm run build && node --test dist/policy.test.js dist/windows-mcp.test.js dist/mcp.test.js",
     "check": "npm run test",
+    "check:windows-mcp": "npm run build && node dist/windows-mcp-smoke.js",
     "register:codex": "npm run build && node scripts/register-codex.mjs"
   },
   "engines": {

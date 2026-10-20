@@ -1,6 +1,6 @@
 # Talk with AI
 
-一个基于 **Spring AI + Vue 3** 的 AI 对话应用，集成 DeepSeek 大模型对话、MySQL 聊天记录持久化，并通过**本地部署的 IndexTTS** 实现语音合成播放。
+一个基于 **Spring AI + Vue 3** 的 AI 对话应用，集成 DeepSeek 大模型对话、MySQL 聊天记录持久化，并通过 Fish Audio / 阿里云 Voice Studio 实现语音合成播放。
 
 ## 技术栈
 
@@ -16,7 +16,7 @@
 - MySQL + MyBatis（聊天记录持久化）
 - Flyway（数据库版本管理）
 - Actuator（健康检查）
-- TTS：HTTP 调用后端代理的阿里云 Voice Studio 实时语音合成
+- TTS：Fish Audio（默认）+ 阿里云 Voice Studio（保留回退）
 
 > 聊天记录以 **MySQL 为唯一事实来源**：前端回显和拼装大模型上下文都从数据库读取，
 > 不再依赖 Redis 或 Spring AI 的内存 ChatMemory，因此进程重启后对话上下文依然连续。
@@ -58,11 +58,12 @@ talk with ai/
 - AI 回复按 Markdown 渲染（代码块、列表、表格等）
 - 聊天记录持久化到 MySQL，前端会话列表从数据库读取
 - 按用户隔离的会话数据（匿名 userId，见下文说明）
-- 阿里云 Voice Studio 语音播报（可开关、排队播放、结果带 LRU 缓存）
+- Fish Audio 克隆音色播报（阿里云 Voice Studio 可回退、结果带 LRU 缓存）
 - 桌面端按住说话：松开后用 Qwen3-ASR 转文字，自动提问并朗读 AI 回复
-- 桌面端窗口理解：截取前台窗口、本地预览确认，再由 DeepSeek V4.1 Flash 分析图片
+- 桌面端窗口理解：模型识别视觉意图，确认后截取前台窗口并由 DeepSeek V4.1 Flash 分析
 - 当地天气查询（城市搜索 / 浏览器定位）、3 天预报与出行穿衣建议
 - 桌面端本地命令：发现当前电脑已安装的软件，确认后安全启动
+- 桌面端 AI 工具意图：普通对话先由模型判断是否需要本机能力，经白名单校验与用户确认后执行
 - 统一的错误响应、全局异常处理、健康检查
 
 ## 环境要求
@@ -133,6 +134,7 @@ npm run dev
 | --- | --- | --- |
 | POST | `/ai/chat` | **推荐**。Body: `{userId, conversationId, prompt}`，返回纯文本流 |
 | POST | `/ai/chat-stream` | **推荐**。同上，返回 SSE |
+| POST | `/ai/tool-intent` | 无状态工具规划。Body: `{prompt}`，仅返回白名单工具提议，不执行本机操作 |
 | GET | `/ai/chat?userId=&prompt=&conversationId=` | 兼容旧调用方，prompt 请改用 POST |
 | GET | `/ai/chat-stream?...` | 兼容旧调用方 |
 | GET | `/getChatIds?userId=` | 会话列表（**userId 必填**） |
@@ -187,8 +189,13 @@ npm run dev
 | `CHAT_CONTEXT_MAX_CHARS` | `12000` | 送入模型的历史总字数上限 |
 | `TTS_MAX_TEXT_CHARS` | `5000` | 单次合成最大字符数 |
 | `TTS_CACHE_MAX_ENTRIES` / `TTS_CACHE_MAX_BYTES` | `200` / `50MB` | 语音缓存上限 |
-| `TTS_ALIYUN_API_KEY` | 空 | **必填**，Voice Studio API Key |
-| `TTS_ALIYUN_VOICE_ID` | 空 | **必填**，Voice Studio 音色 ID |
+| `TTS_PROVIDER` / `TTS_FALLBACK_PROVIDER` | `fish` / `aliyun` | 首选与回退语音提供方 |
+| `TTS_FISH_API_KEY` | 空 | 使用 Fish Audio 时必填，只能放服务端 |
+| `TTS_FISH_REFERENCE_ID` | 空 | Fish Audio 克隆音色的模型 ID |
+| `TTS_FISH_MODEL` | `drama-3` | Fish Audio TTS 模型（已用当前音色实测） |
+| `TTS_FISH_PROXY_HOST` / `TTS_FISH_PROXY_PORT` | 空 / `0` | 可选，仅用于无法直连 Fish Audio 的本地网络 |
+| `TTS_ALIYUN_API_KEY` | 空 | 可选，旧 Voice Studio 回退 API Key |
+| `TTS_ALIYUN_VOICE_ID` | 空 | 可选，旧 Voice Studio 回退音色 ID |
 | `TTS_ALIYUN_ENDPOINT` | `wss://convai-platform.aliyuncs.com/api-ws/v1/inference` | 实时合成 WebSocket 地址 |
 | `DASHSCOPE_API_KEY` | 空 | **必填**，服务端调用 Qwen3-ASR |
 | `DASHSCOPE_CHAT_URL` | 阿里云百炼 OpenAI 兼容地址 | 语音识别网关 |
@@ -205,10 +212,12 @@ npm run dev
   `CHAT_CONTEXT_MAX_CHARS` 的历史送给模型（最新一条永远保留）。系统提示词本身约 2700 tokens，
   不做限制会很快撞上模型上下文上限。
 
-## 语音合成（阿里云 Voice Studio）
+## 语音合成（Fish Audio + Voice Studio 回退）
 
-后端使用 `com.aliyun.convai:convai-voice-sdk:0.1.0` 连接 Voice Studio 实时 WebSocket，
-按音色 ID 合成 WAV 音频。把 `TTS_ALIYUN_API_KEY` 和 `TTS_ALIYUN_VOICE_ID` 写入本地 `.env` 后重启后端即可。
+普通朗读通过 Fish Audio HTTP API 生成 WAV，实时通话通过其流式响应接收 24 kHz PCM；
+将 `TTS_FISH_API_KEY` 与 `TTS_FISH_REFERENCE_ID` 写入本地 `.env` 后重启后端即可。
+原来的 `com.aliyun.convai:convai-voice-sdk` 集成仍然保留，配置旧密钥后会在 Fish Audio 请求或合成失败时自动回退。
+请求格式与参数遵循 [Fish Audio 官方 Quick Start](https://docs.fish.audio/developer-guide/getting-started/quickstart)。
 
 ## 数据库与迁移
 
@@ -251,8 +260,8 @@ docker compose up -d --build
   `APP_CORS_ALLOWED_ORIGINS` 收紧到具体域名。
 - 生产环境请用 `--spring.profiles.active=prod`：它会把日志从 `debug` 收紧到 `info`。
   默认配置下 `SimpleLoggerAdvisor` 会把整段 prompt（含几万字的系统提示词）打进日志。
-- TTS 使用阿里云 Voice Studio，容器部署时请通过环境变量注入 `TTS_ALIYUN_API_KEY` 和
-  `TTS_ALIYUN_VOICE_ID`，不要把密钥写入镜像或提交到仓库。前端按句朗读并带缓存，
+- TTS 默认使用 Fish Audio，容器部署时请通过环境变量注入 `TTS_FISH_API_KEY` 和
+  `TTS_FISH_REFERENCE_ID`；阿里云变量只用于可选回退。不要把密钥写入镜像或提交到仓库。前端按句朗读并带缓存，
   所以首句会有等待感，属正常现象。
 - 生产环境不要使用 `root` 连接数据库，建议建专用账号。
 
@@ -297,11 +306,22 @@ npm run desktop:build
 本地软件命令。启动成功后，客户端只把软件显示名称和“启动成功”事件作为对话上下文发送给
 服务端，让 AI 按角色自然回应；不会上传安装路径，也不会让 AI 假装看到了软件中的窗口或文件。
 
+### AI 本机工具意图
+
+桌面端的普通输入会先调用 `/ai/tool-intent` 做一次无状态判断。当前只开放
+`open_application` 和 `inspect_current_window` 两个工具；模型的输出还会在服务端和客户端各做一次
+固定白名单与参数校验。规划接口不会写聊天记录，也没有执行本机工具的权限。
+
+命中工具后，客户端会显示工具名、参数和影响范围，用户确认后才调用 Tauri 本机命令或截图分析。
+打开软件只使用本机目录返回的不透明应用 ID，模型提供的名称不能作为路径或命令执行；窗口分析只做
+一次前台窗口截图。模型输出的路径、URL、Shell、点击、输入、文件操作等能力全部被拒绝。
+
 ### 窗口截图理解与按住说话
 
-桌面端标题栏的相机按钮会临时隐藏自身，再截取当时位于前台的 Windows 窗口。截图先留在
-本机预览，只有点击“发送并分析”后才上传；上传前应主动检查账号、密钥等敏感信息。第一阶段
-仅支持 Windows，并且只截取单个前台窗口，不会持续录屏。
+桌面端会识别“你觉得这个怎么样”“帮我看看当前页面”“这个报错怎么回事”等依赖视觉上下文
+的问题，先展示截图工具的名称与影响范围；用户确认后，客户端会临时隐藏自身、截取用户此前正在
+查看的 Windows 窗口，并把原问题与截图一起交给视觉模型回答。该能力只在这类视觉意图命中时触发，
+只截取单个前台窗口，不会持续录屏；使用时应避免让账号、密钥等敏感信息出现在目标窗口中。
 
 输入框旁的麦克风按钮支持鼠标或触控“按住说话、松开发送”，最长录制 60 秒。客户端仅把
 本次录音上传到 `/api/ai/asr` 转写，识别文本会沿用普通对话链路发送，AI 回复则沿用现有 TTS
@@ -320,7 +340,7 @@ npm run desktop:build
 只有播放器确认播放完的句子进入后续聊天记忆，打断的回复会有标记。
 
 后端使用已有 `DASHSCOPE_API_KEY` 调用 `qwen3-asr-flash-realtime`，
-沿用 DeepSeek、人设、天气地点与 Voice Studio 音色，仍需联网。
+沿用 DeepSeek、人设、天气地点与当前 TTS 音色，仍需联网。
 `VOICE_ASR_URL` 留空时沿用 `DASHSCOPE_CHAT_URL` 的业务空间域名；
 也可以显式配置不带查询参数的 `wss://.../api-ws/v1/realtime`。
 本地入口是 `/voice/realtime`，Vite 的 `/api` 代理已经开启 WebSocket 转发。

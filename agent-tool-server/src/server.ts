@@ -23,6 +23,10 @@ import {
   type AllowedApplication,
   typeText,
 } from "./windows.js";
+import {
+  getWindowsMcpBridge,
+  getWindowsMcpRuntimeInfo,
+} from "./windows-mcp.js";
 
 const server = new McpServer(
   {
@@ -33,6 +37,7 @@ const server = new McpServer(
     instructions:
       "Inspect state before acting. Prefer window metadata over coordinates. " +
       "After clicks or typing, capture the screen to verify the result. " +
+      "Prefer inspect_desktop and wait_for_ui for accessibility-aware Windows automation. " +
       "Never request or type passwords, API keys, payment data, or other secrets.",
   },
 );
@@ -76,9 +81,199 @@ server.registerTool(
       supported: process.platform === "win32",
       writeEnabled: isWriteEnabled(),
       allowedHosts,
+      windowsMcp: getWindowsMcpRuntimeInfo(),
     };
     return textResult(JSON.stringify(status, null, 2), status);
   },
+);
+
+const displaySchema = z.array(z.number().int().min(0).max(31)).min(1).max(8).optional();
+const regionSchema = z
+  .tuple([z.number().int(), z.number().int(), z.number().int(), z.number().int()])
+  .optional();
+
+function validateRegion(region?: [number, number, number, number]) {
+  if (!region) return;
+  const [left, top, right, bottom] = region;
+  validateCoordinate(left, "region.left");
+  validateCoordinate(top, "region.top");
+  validateCoordinate(right, "region.right");
+  validateCoordinate(bottom, "region.bottom");
+  if (right <= left || bottom <= top) {
+    throw new Error("Desktop region must have right > left and bottom > top.");
+  }
+}
+
+server.registerTool(
+  "windows_mcp_status",
+  {
+    title: "Check Windows-MCP status",
+    description:
+      "Start the pinned local Windows-MCP sidecar if needed and report its desktop-control status.",
+    inputSchema: {},
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: false,
+    },
+  },
+  async () => safeToolCall(() => getWindowsMcpBridge().callTool("ControlStatus", {}, 15_000)),
+);
+
+server.registerTool(
+  "list_displays",
+  {
+    title: "List Windows displays",
+    description: "Return active Windows display bounds, DPI, scale and primary-display metadata.",
+    inputSchema: {},
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: false,
+    },
+  },
+  async () => safeToolCall(() => getWindowsMcpBridge().callTool("DisplayInventory", {})),
+);
+
+server.registerTool(
+  "inspect_desktop",
+  {
+    title: "Inspect Windows desktop controls",
+    description:
+      "Inspect the current Windows UI through accessibility metadata. Can optionally inspect browser DOM or include an annotated screenshot.",
+    inputSchema: {
+      includeScreenshot: z.boolean().default(false),
+      useDom: z.boolean().default(false),
+      includeAnnotations: z.boolean().default(true),
+      includeUiTree: z.boolean().default(true),
+      displays: displaySchema,
+      region: regionSchema,
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ includeScreenshot, useDom, includeAnnotations, includeUiTree, displays, region }) =>
+    safeToolCall(async () => {
+      validateRegion(region);
+      return getWindowsMcpBridge().callTool("Snapshot", {
+        use_vision: includeScreenshot,
+        use_dom: useDom,
+        use_annotation: includeAnnotations,
+        use_ui_tree: includeUiTree,
+        ...(displays ? { display: [...new Set(displays)] } : {}),
+        ...(region ? { region } : {}),
+      });
+    }),
+);
+
+server.registerTool(
+  "capture_desktop",
+  {
+    title: "Capture Windows desktop",
+    description:
+      "Capture a fast Windows-MCP screenshot with desktop and window summaries. Avoid private or sensitive content.",
+    inputSchema: {
+      includeAnnotations: z.boolean().default(false),
+      displays: displaySchema,
+      region: regionSchema,
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ includeAnnotations, displays, region }) =>
+    safeToolCall(async () => {
+      validateRegion(region);
+      return getWindowsMcpBridge().callTool("Screenshot", {
+        use_annotation: includeAnnotations,
+        ...(displays ? { display: [...new Set(displays)] } : {}),
+        ...(region ? { region } : {}),
+      });
+    }),
+);
+
+server.registerTool(
+  "wait_for_ui",
+  {
+    title: "Wait for a Windows UI condition",
+    description:
+      "Wait for text, a window or an accessible UI element instead of using arbitrary sleeps.",
+    inputSchema: {
+      condition: z.enum([
+        "text_exists",
+        "active_window",
+        "element_exists",
+        "element_enabled",
+        "focused_element",
+      ]),
+      text: z.string().trim().min(1).max(200).optional(),
+      windowName: z.string().trim().min(1).max(200).optional(),
+      timeoutSeconds: z.number().min(0.5).max(30).default(10),
+      intervalSeconds: z.number().min(0.1).max(2).default(0.25),
+      useDom: z.boolean().default(false),
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ condition, text, windowName, timeoutSeconds, intervalSeconds, useDom }) =>
+    safeToolCall(async () => {
+      if (intervalSeconds > timeoutSeconds) {
+        throw new Error("Wait interval must not exceed the timeout.");
+      }
+      if (condition === "text_exists" && !text) {
+        throw new Error("text is required for the text_exists condition.");
+      }
+      if (condition === "active_window" && !windowName) {
+        throw new Error("windowName is required for the active_window condition.");
+      }
+      return getWindowsMcpBridge().callTool(
+        "WaitFor",
+        {
+          condition,
+          ...(text ? { text } : {}),
+          ...(windowName ? { window_name: windowName } : {}),
+          timeout: timeoutSeconds,
+          interval: intervalSeconds,
+          use_dom: useDom,
+        },
+        Math.ceil((timeoutSeconds + 10) * 1_000),
+      );
+    }),
+);
+
+server.registerTool(
+  "launch_installed_application",
+  {
+    title: "Launch an installed Windows application",
+    description:
+      "Launch an installed application by its localized Start Menu name. Executable paths and arguments are never accepted. Requires write actions to be enabled.",
+    inputSchema: {
+      name: z
+        .string()
+        .trim()
+        .min(1)
+        .max(200)
+        .refine((value) => !/[\u0000-\u001f\u007f]/.test(value), "Application name contains control characters."),
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ name }) =>
+    safeToolCall(async () => {
+      requireWriteEnabled("launch_installed_application");
+      return getWindowsMcpBridge().callTool("App", { mode: "launch", name }, 45_000);
+    }),
 );
 
 server.registerTool(

@@ -24,15 +24,21 @@ test("MCP server exposes the expected tools and keeps writes disabled", async ()
     const listed = await client.listTools();
     const names = listed.tools.map((tool) => tool.name).sort();
     assert.deepEqual(names, [
+      "capture_desktop",
       "capture_screen",
       "click_screen",
       "computer_status",
       "get_cursor_position",
       "get_system_info",
+      "inspect_desktop",
+      "launch_installed_application",
+      "list_displays",
       "list_windows",
       "open_application",
       "open_url",
       "type_text",
+      "wait_for_ui",
+      "windows_mcp_status",
     ]);
 
     const status = await client.callTool({

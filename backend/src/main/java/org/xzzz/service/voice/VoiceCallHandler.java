@@ -1,8 +1,5 @@
 package org.xzzz.service.voice;
 
-import com.convai.voice.sdk.SentenceEvent;
-import com.convai.voice.sdk.realtime.SynthesisListener;
-import com.convai.voice.sdk.realtime.SynthesisSession;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -12,6 +9,8 @@ import org.springframework.web.socket.handler.ConcurrentWebSocketSessionDecorato
 import org.xzzz.entity.dto.ClientContext;
 import org.xzzz.service.ChatHistoryService;
 import org.xzzz.service.XiLianChatService;
+import org.xzzz.service.tts.StreamingTtsListener;
+import org.xzzz.service.tts.StreamingTtsSession;
 import org.xzzz.service.tts.TtsService;
 import reactor.core.Disposable;
 import reactor.core.Disposables;
@@ -274,19 +273,18 @@ public class VoiceCallHandler extends AbstractWebSocketHandler {
         }
 
         void synthesize(Turn turn) {
-            try (SynthesisSession synthesis = tts.openStreamingSession(new SynthesisListener() {
+            try (StreamingTtsSession synthesis = tts.openStreamingSession(new StreamingTtsListener() {
                 @Override public void onAudio(byte[] audio) {
                     if (turn.cancelled || closed || current != turn) return;
                     turn.samples.addAndGet(audio.length / 2);
                     send("audio.delta", Map.of("turnId", turn.id,
                             "audio", Base64.getEncoder().encodeToString(audio)));
                 }
-                @Override public void onSentence(SentenceEvent event) {
-                    if (event.type() != SentenceEvent.Type.SENTENCE_END) return;
+                @Override public void onSentence(String text) {
                     long endSample = turn.samples.get();
                     execute(() -> {
                         if (current != turn) return;
-                        turn.sentenceText.append(event.originalText());
+                        turn.sentenceText.append(text);
                         turn.receipts.put(endSample, turn.sentenceText.toString());
                         turn.ack(turn.ackSamples);
                     });

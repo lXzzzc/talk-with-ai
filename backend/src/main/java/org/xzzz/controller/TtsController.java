@@ -24,7 +24,7 @@ public class TtsController {
     private int maxTextChars;
 
     /**
-     * 推荐用法：POST + JSON body。返回阿里云 Voice Studio WAV 音频。
+     * 推荐用法：POST + JSON body。返回当前 TTS 提供方生成的 WAV 音频。
      */
     @PostMapping(value = "/tts", produces = "audio/wav")
     public ResponseEntity<byte[]> ttsPost(@RequestBody TtsRequest request) {

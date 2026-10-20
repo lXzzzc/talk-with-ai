@@ -6,6 +6,7 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.web.socket.*;
 import org.xzzz.service.ChatHistoryService;
 import org.xzzz.service.XiLianChatService;
+import org.xzzz.service.tts.StreamingTtsSession;
 import org.xzzz.service.tts.TtsService;
 import reactor.core.publisher.Flux;
 import tools.jackson.databind.JsonNode;
@@ -46,7 +47,7 @@ class VoiceCallHandlerTest {
         when(asr.connect(any(), any())).thenReturn(CompletableFuture.completedFuture(connection));
         when(chat.chatForVoice(anyString(), anyString(), anyString(), any(), any())).thenReturn(Flux.never());
         // TTS 等待文本，在取消时中断退出，不会调用任何付费服务。
-        when(tts.openStreamingSession(any())).thenReturn(mock(com.convai.voice.sdk.realtime.SynthesisSession.class));
+        when(tts.openStreamingSession(any())).thenReturn(mock(StreamingTtsSession.class));
         handler.afterConnectionEstablished(session);
         handler.handleMessage(session, new TextMessage("{\"type\":\"start\",\"userId\":\"voice-test\",\"conversationId\":\"chat-test\"}"));
         @SuppressWarnings("unchecked") ArgumentCaptor<Consumer<JsonNode>> events = ArgumentCaptor.forClass(Consumer.class);

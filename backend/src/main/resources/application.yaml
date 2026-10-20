@@ -64,10 +64,21 @@ chat:
     max-chars: ${CHAT_CONTEXT_MAX_CHARS:12000}
 
 tts:
+  provider: ${TTS_PROVIDER:fish}
+  fallback-provider: ${TTS_FALLBACK_PROVIDER:aliyun}
   max-text-chars: ${TTS_MAX_TEXT_CHARS:5000}
   cache:
     max-entries: ${TTS_CACHE_MAX_ENTRIES:200}
     max-bytes: ${TTS_CACHE_MAX_BYTES:52428800}
+  fish:
+    endpoint: ${TTS_FISH_ENDPOINT:https://api.fish.audio/v1/tts}
+    api-key: ${TTS_FISH_API_KEY:}
+    reference-id: ${TTS_FISH_REFERENCE_ID:}
+    model: ${TTS_FISH_MODEL:drama-3}
+    speed: ${TTS_FISH_SPEED:1.0}
+    timeout-seconds: ${TTS_FISH_TIMEOUT_SECONDS:60}
+    proxy-host: ${TTS_FISH_PROXY_HOST:}
+    proxy-port: ${TTS_FISH_PROXY_PORT:0}
   aliyun:
     endpoint: ${TTS_ALIYUN_ENDPOINT:wss://convai-platform.aliyuncs.com/api-ws/v1/inference}
     api-key: ${TTS_ALIYUN_API_KEY:}
