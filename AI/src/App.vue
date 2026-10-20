@@ -14,7 +14,9 @@ import {
   parseOpenApplicationCommand
 } from './localCommands.js'
 import { isDesktopRuntime } from './runtime.js'
+import { shouldCaptureCurrentWindow } from './screenIntent.js'
 import { analyzeWindowCapture, captureCurrentWindow } from './screenVision.js'
+import { fallbackToolIntent, normalizeToolIntent } from './toolIntent.js'
 import { playBlob, speak, synthesize } from './tts.js'
 import {
   isVoiceInputSupported,
@@ -23,6 +25,7 @@ import {
 } from './voiceInput.js'
 
 const endpoint = apiUrl('/api/ai/chat')
+const toolIntentEndpoint = apiUrl('/api/ai/tool-intent')
 const chatType = 'chat'
 const storageKey = 'spring-ai-test-conversations'
 const userIdKey = 'spring-ai-test-user-id'
@@ -84,10 +87,10 @@ const weatherData = ref(null)
 const weatherLoading = ref(false)
 const weatherError = ref('')
 const pendingAppLaunch = ref(null)
+const pendingScreenInspection = ref(null)
 const openingApp = ref(false)
+const toolPlanning = ref(false)
 const recentApplication = ref(null)
-const screenshotPreview = ref(null)
-const screenshotQuestion = ref('')
 const screenshotBusy = ref(false)
 const voiceState = ref('idle')
 const voiceCallActive = ref(false)
@@ -103,10 +106,10 @@ let voiceHeartbeatTimer = null
 let lastVoiceHeartbeat = 0
 
 const suggestions = [
-  { icon: '✨', title: '随便聊聊', text: '今天有什么值得开心的小事？' },
-  { icon: '📚', title: '帮我学习', text: '请用简单的方式教我一个有趣的新知识。' },
-  { icon: '💡', title: '一起想想', text: '帮我整理一下今天最重要的三件事。' },
-  { icon: '🌤️', title: '天气建议', text: '打开右上角的天气按钮，看看今天适合做什么。' }
+  { icon: '✦', title: '随便聊聊', text: '今天有什么值得开心的小事？' },
+  { icon: '◇', title: '帮我学习', text: '请用简单的方式教我一个有趣的新知识。' },
+  { icon: '⌑', title: '一起想想', text: '帮我整理一下今天最重要的三件事。' },
+  { icon: '☀', title: '天气建议', text: '打开右上角的天气按钮，看看今天适合做什么。' }
 ]
 
 /** 主题：index.html 里的内联脚本已经先写好 data-theme，这里只负责读取和切换。 */
@@ -144,7 +147,8 @@ const headerSub = computed(() => {
   if (voiceState.value === 'requesting') return '正在请求麦克风权限…'
   if (voiceState.value === 'recording') return '正在聆听，松开后发送'
   if (voiceState.value === 'transcribing') return '正在识别你的话…'
-  if (responseStage.value === 'analyzing') return '正在查看你确认的窗口截图…'
+  if (toolPlanning.value) return '正在判断是否需要本机工具…'
+  if (responseStage.value === 'analyzing') return '正在查看当前窗口并理解你的问题…'
   if (isLoading.value) return ''
   if (errorText.value) return '请求出错，请查看对话中的提示'
   return ''
@@ -154,8 +158,11 @@ const canSend = computed(
   () =>
     inputText.value.trim().length > 0 &&
     !isLoading.value &&
+    !toolPlanning.value &&
     !openingApp.value &&
     !screenshotBusy.value &&
+    !pendingAppLaunch.value &&
+    !pendingScreenInspection.value &&
     !voiceCallActive.value &&
     voiceState.value === 'idle'
 )
@@ -930,7 +937,27 @@ async function appendLocalAssistantMessage(conversation, content) {
   }
 }
 
-async function handleLocalApplicationCommand(prompt, command) {
+async function requestToolIntent(prompt) {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 12_000)
+  try {
+    const res = await httpFetch(toolIntentEndpoint, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json'
+      },
+      body: JSON.stringify({ prompt })
+    })
+    if (!res.ok) throw new Error(await readErrorMessage(res))
+    return normalizeToolIntent(await res.json())
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+async function handleLocalApplicationCommand(prompt, command, intent = null) {
   const conversation = ensureConversation(prompt)
   conversation.messages.push({ role: 'user', content: prompt })
   messages.value = conversation.messages
@@ -954,7 +981,8 @@ async function handleLocalApplicationCommand(prompt, command) {
       prompt,
       applications,
       selectedApplicationId: applications[0]?.id || '',
-      conversation
+      conversation,
+      intent
     }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
@@ -1025,49 +1053,52 @@ async function chooseApplicationFile() {
   }
 }
 
-/* ------------------------------------------------------ 截图理解与语音输入 */
+/* ------------------------------------------------------ 自动截图理解与语音输入 */
 
-const DEFAULT_SCREENSHOT_QUESTION = '请概括当前窗口的内容，并指出值得我注意的信息。'
+function prepareCurrentWindowInspection(prompt, intent) {
+  const conversation = ensureConversation(prompt)
+  conversation.messages.push({ role: 'user', content: prompt })
+  messages.value = conversation.messages
+  pendingScreenInspection.value = { prompt, conversation, intent }
+  void scrollToBottom(true)
+}
 
-async function openScreenshotPreview() {
-  if (!desktopRuntime || isLoading.value || openingApp.value || screenshotBusy.value) return
+async function confirmCurrentWindowInspection() {
+  const pending = pendingScreenInspection.value
+  if (!pending || screenshotBusy.value) return
+  pendingScreenInspection.value = null
+  await analyzeCurrentWindowPrompt(pending.prompt, {
+    conversation: pending.conversation,
+    appendUser: false
+  })
+}
 
-  screenshotBusy.value = true
-  stopAllTts()
+async function cancelCurrentWindowInspection() {
+  const pending = pendingScreenInspection.value
+  if (!pending || screenshotBusy.value) return
+  pendingScreenInspection.value = null
+  openingApp.value = true
   try {
-    const capture = await captureCurrentWindow()
-    screenshotPreview.value = capture
-    screenshotQuestion.value = DEFAULT_SCREENSHOT_QUESTION
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error)
-    showToast(detail || '当前窗口截图失败')
+    await appendLocalAssistantMessage(pending.conversation, '已取消查看当前窗口。')
   } finally {
-    screenshotBusy.value = false
+    openingApp.value = false
   }
 }
 
-function cancelScreenshotPreview() {
-  if (screenshotBusy.value) return
-  screenshotPreview.value = null
-  screenshotQuestion.value = ''
-}
+async function analyzeCurrentWindowPrompt(prompt, options = {}) {
+  if (!desktopRuntime || isLoading.value || openingApp.value || screenshotBusy.value) return
 
-async function analyzeScreenshot() {
-  const capture = screenshotPreview.value
-  if (!capture || isLoading.value || screenshotBusy.value) return
-
-  const question = screenshotQuestion.value.trim() || DEFAULT_SCREENSHOT_QUESTION
-  const userMessage = capture.title
-    ? `查看当前窗口“${capture.title}”：${question}`
-    : `查看当前窗口：${question}`
-  const conversation = ensureConversation(userMessage)
+  const conversation = options.conversation || ensureConversation(prompt)
   const assistantMessage = { role: 'assistant', content: '' }
 
-  conversation.messages.push({ role: 'user', content: userMessage }, assistantMessage)
+  // 对话中保留用户原话。窗口标题只作为视觉模型上下文，不改写用户消息。
+  if (options.appendUser === false) {
+    conversation.messages.push(assistantMessage)
+  } else {
+    conversation.messages.push({ role: 'user', content: prompt }, assistantMessage)
+  }
   messages.value = conversation.messages
   const messageIndex = conversation.messages.length - 1
-  screenshotPreview.value = null
-  screenshotQuestion.value = ''
   screenshotBusy.value = true
   isLoading.value = true
   responseStage.value = 'analyzing'
@@ -1078,9 +1109,11 @@ async function analyzeScreenshot() {
   await scrollToBottom(true)
 
   try {
+    // 客户端会暂时隐藏自身，让 Windows 将用户此前正在查看的窗口恢复到前台。
+    const capture = await captureCurrentWindow()
     const result = await analyzeWindowCapture({
       capture,
-      question,
+      question: prompt,
       userId,
       conversationId: conversation.id,
       signal: abortController.signal
@@ -1111,9 +1144,9 @@ async function analyzeScreenshot() {
     }
   } catch (error) {
     if (error?.name === 'AbortError') return
-    const detail = error?.message || '图片分析失败'
+    const detail = error?.message || '当前窗口分析失败'
     errorText.value = detail
-    assistantMessage.content = `图片分析失败：${detail}`
+    assistantMessage.content = `我没能看清当前窗口：${detail}`
     conversation.messages[messageIndex] = { ...assistantMessage }
     messages.value = conversation.messages
   } finally {
@@ -1231,8 +1264,11 @@ async function sendPrompt() {
     !prompt ||
     voiceCallActive.value ||
     isLoading.value ||
+    toolPlanning.value ||
     openingApp.value ||
     screenshotBusy.value ||
+    pendingAppLaunch.value ||
+    pendingScreenInspection.value ||
     voiceState.value !== 'idle'
   ) return
 
@@ -1242,9 +1278,35 @@ async function sendPrompt() {
   await nextTick()
   autoGrow()
 
-  if (localCommand) {
-    await handleLocalApplicationCommand(prompt, localCommand)
-    return
+  if (desktopRuntime) {
+    const localFallback = fallbackToolIntent(
+      localCommand,
+      shouldCaptureCurrentWindow(prompt)
+    )
+    let intent
+    toolPlanning.value = true
+    try {
+      intent = await requestToolIntent(prompt)
+    } catch {
+      // Older/offline backends continue to support explicit safe commands via local rules.
+      intent = localFallback
+    } finally {
+      toolPlanning.value = false
+    }
+
+    if (intent.tool === 'open_application') {
+      await handleLocalApplicationCommand(
+        prompt,
+        { type: intent.tool, target: intent.arguments.target },
+        intent
+      )
+      return
+    }
+
+    if (intent.tool === 'inspect_current_window') {
+      prepareCurrentWindowInspection(prompt, intent)
+      return
+    }
   }
 
   const conversation = ensureConversation(prompt)
@@ -1392,7 +1454,7 @@ function onKeydown(event) {
     closeSidebar()
     weatherOpen.value = false
     if (!openingApp.value) pendingAppLaunch.value = null
-    cancelScreenshotPreview()
+    if (!screenshotBusy.value) pendingScreenInspection.value = null
     if (voiceState.value === 'recording' || voiceState.value === 'requesting') {
       void cancelVoiceRecording()
     }
@@ -1446,7 +1508,8 @@ onBeforeUnmount(() => {
         <div class="brand-logo">
           <img src="/ai-avatar.png" alt="" />
         </div>
-        <div>
+        <div class="brand-copy">
+          <span class="brand-kicker">AI COMPANION</span>
           <div class="brand-name">昔涟</div>
           <div class="brand-sub">翁法洛斯第十三位黄金裔</div>
         </div>
@@ -1508,6 +1571,16 @@ onBeforeUnmount(() => {
         <div v-if="conversations.length === 0" class="empty-history">还没有历史对话</div>
       </div>
 
+      <div class="sidebar-companion">
+        <div class="sidebar-companion-art" aria-hidden="true">
+          <img src="/xilian-portrait.png" alt="" />
+        </div>
+        <div class="sidebar-companion-copy">
+          <strong><span></span>昔涟在线</strong>
+          <p>愿此刻的涟漪，陪你去往想去的地方。</p>
+        </div>
+      </div>
+
       <div class="sidebar-foot">
         <span class="dot"></span>
         <span>本机匿名身份 · 数据按浏览器分区</span>
@@ -1537,22 +1610,6 @@ onBeforeUnmount(() => {
               <path d="M22 16.9V20a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2 4.2 2 2 0 0 1 4 2h3a2 2 0 0 1 2 1.7c.1 1 .4 2 .7 2.9a2 2 0 0 1-.5 2.1L8 10a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.5c.9.3 1.9.6 2.9.7a2 2 0 0 1 1.7 2Z"/>
             </svg>
           </button>
-          <button
-            v-if="desktopRuntime"
-            class="icon-btn"
-            :class="{ on: !!screenshotPreview }"
-            type="button"
-            :disabled="isLoading || openingApp || screenshotBusy || voiceCallActive || voiceState !== 'idle'"
-            title="截图并分析当前窗口"
-            aria-label="截图并分析当前窗口"
-            @click="openScreenshotPreview"
-          >
-            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M4 7.5h3l1.3-2h7.4l1.3 2h3a2 2 0 0 1 2 2v8.5a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9.5a2 2 0 0 1 2-2Z" />
-              <circle cx="12" cy="13" r="3.4" />
-            </svg>
-          </button>
-
           <button
             class="icon-btn"
             :class="{ on: weatherOpen }"
@@ -1656,22 +1713,37 @@ onBeforeUnmount(() => {
 
       <section class="chat-body" @click="onBodyClick">
         <div v-if="messages.length === 0" class="hero">
-          <div class="hero-badge">
-            <img src="/ai-avatar.png" alt="" />
+          <div class="hero-copy">
+            <div class="hero-kicker"><span></span> CYRENE · AI COMPANION</div>
+            <h2 class="hero-title">让每一次对话，<br /><em>泛起温柔的涟漪</em></h2>
+            <p class="hero-sub">陪你聊天、听你说话，也能在你确认后查看屏幕、打开本机应用。</p>
+            <div class="suggestions">
+              <button
+                v-for="suggestion in suggestions"
+                :key="suggestion.text"
+                class="suggestion"
+                type="button"
+                @click="useSuggestion(suggestion)"
+              >
+                <span class="suggestion-icon">{{ suggestion.icon }}</span>
+                <span class="suggestion-copy">
+                  <span class="suggestion-title">{{ suggestion.title }}</span>
+                  <span class="suggestion-text">{{ suggestion.text }}</span>
+                </span>
+                <span class="suggestion-arrow" aria-hidden="true">↗</span>
+              </button>
+            </div>
           </div>
-          <h2 class="hero-title">要和昔涟说些什么吗？</h2>
-          <p class="hero-sub"> </p>
-          <div class="suggestions">
-            <button
-              v-for="suggestion in suggestions"
-              :key="suggestion.text"
-              class="suggestion"
-              type="button"
-              @click="useSuggestion(suggestion)"
-            >
-              <span class="suggestion-title">{{ suggestion.icon }} {{ suggestion.title }}</span>
-              <span class="suggestion-text">{{ suggestion.text }}</span>
-            </button>
+
+          <div class="hero-visual" aria-hidden="true">
+            <div class="hero-halo"></div>
+            <span class="hero-orbit hero-orbit-one"></span>
+            <span class="hero-orbit hero-orbit-two"></span>
+            <span class="hero-star hero-star-one">✦</span>
+            <span class="hero-star hero-star-two">✧</span>
+            <span class="hero-star hero-star-three">·</span>
+            <img class="hero-character" src="/xilian-chibi.png" alt="" />
+            <div class="hero-presence"><span></span>昔涟已连接</div>
           </div>
         </div>
 
@@ -1703,7 +1775,7 @@ onBeforeUnmount(() => {
                     v-html="renderMarkdown(message.content)"
                   ></div>
                 </template>
-                <template v-else>{{ message.content }}</template>
+                <template v-else><span class="bubble-text">{{ message.content }}</span></template>
               </div>
 
               <div class="msg-actions">
@@ -1838,6 +1910,7 @@ onBeforeUnmount(() => {
           {{ selectedPendingApplication?.icon || '🔎' }}
         </div>
         <div class="command-copy">
+          <span class="command-tool-label">AI 工具意图 · open_application</span>
           <h2 v-if="selectedPendingApplication" id="command-title">
             打开{{ selectedPendingApplication.label }}？
           </h2>
@@ -1846,6 +1919,11 @@ onBeforeUnmount(() => {
             来源：{{ selectedPendingApplication.sourceLabel }}。确认后将在你的电脑上启动该软件。
           </p>
           <p v-else>可以手动选择它的 .exe 文件或开始菜单快捷方式，客户端会记住这台电脑上的位置。</p>
+        </div>
+
+        <div class="command-impact">
+          <strong>执行范围</strong>
+          <span>仅启动所选应用，不传递命令行参数，不读取应用内容。</span>
         </div>
 
         <label v-if="pendingAppLaunch.applications.length > 1" class="command-picker">
@@ -1882,32 +1960,31 @@ onBeforeUnmount(() => {
     </div>
 
     <div
-      v-if="screenshotPreview"
+      v-if="pendingScreenInspection"
       class="command-overlay"
       role="presentation"
-      @click.self="cancelScreenshotPreview"
+      @click.self="cancelCurrentWindowInspection"
     >
-      <section class="command-dialog vision-dialog" role="dialog" aria-modal="true" aria-labelledby="vision-title">
-        <div class="vision-heading">
-          <div>
-            <h2 id="vision-title">确认发送这张窗口截图？</h2>
-            <p>{{ screenshotPreview.title || '未命名窗口' }} · {{ screenshotPreview.width }} × {{ screenshotPreview.height }}</p>
-          </div>
-          <button type="button" class="vision-close" aria-label="关闭" @click="cancelScreenshotPreview">×</button>
+      <section class="command-dialog" role="dialog" aria-modal="true" aria-labelledby="screen-command-title">
+        <div class="command-app-icon" aria-hidden="true">👁️</div>
+        <div class="command-copy">
+          <span class="command-tool-label">AI 工具意图 · inspect_current_window</span>
+          <h2 id="screen-command-title">查看当前窗口？</h2>
+          <p>{{ pendingScreenInspection.intent?.description || '确认后将截取当前前台窗口并交给视觉模型分析。' }}</p>
         </div>
 
-        <img class="vision-preview" :src="screenshotPreview.imageData" alt="待分析的当前窗口截图" />
-
-        <label class="vision-question">
-          <span>你想让 AI 看什么？</span>
-          <textarea v-model="screenshotQuestion" rows="3" maxlength="1000"></textarea>
-        </label>
-        <p class="vision-privacy">截图只会在你确认后上传。发送前请检查是否包含密码、密钥或其他敏感信息。</p>
+        <div class="command-impact">
+          <strong>执行范围</strong>
+          <span>只截取一次当前前台窗口；截图会上传到服务端，不会持续录屏。</span>
+        </div>
 
         <div class="command-actions">
-          <button type="button" class="command-cancel" @click="cancelScreenshotPreview">取消</button>
-          <button type="button" class="command-browse" @click="openScreenshotPreview">重新截图</button>
-          <button type="button" class="command-confirm" @click="analyzeScreenshot">发送并分析</button>
+          <button type="button" class="command-cancel" :disabled="screenshotBusy" @click="cancelCurrentWindowInspection">
+            取消
+          </button>
+          <button type="button" class="command-confirm" :disabled="screenshotBusy" @click="confirmCurrentWindowInspection">
+            {{ screenshotBusy ? '正在查看…' : '确认查看' }}
+          </button>
         </div>
       </section>
     </div>

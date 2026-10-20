@@ -104,9 +104,44 @@ fn capture_foreground_window() -> Result<WindowCapture, String> {
         let previous = SelectObject(memory_dc, bitmap);
 
         let capture_result = (|| -> Result<(Vec<u8>, u32, u32), String> {
+            let read_bitmap = || -> Result<Vec<u8>, String> {
+                let mut bitmap_info = BITMAPINFO::default();
+                bitmap_info.bmiHeader.biSize =
+                    size_of::<windows_sys::Win32::Graphics::Gdi::BITMAPINFOHEADER>() as u32;
+                bitmap_info.bmiHeader.biWidth = width;
+                // 负高度让 GetDIBits 返回自上而下的像素，避免再做一次垂直翻转。
+                bitmap_info.bmiHeader.biHeight = -height;
+                bitmap_info.bmiHeader.biPlanes = 1;
+                bitmap_info.bmiHeader.biBitCount = 32;
+                bitmap_info.bmiHeader.biCompression = BI_RGB;
+
+                let mut pixels = vec![0u8; pixel_count * 4];
+                let scan_lines = GetDIBits(
+                    memory_dc,
+                    bitmap,
+                    0,
+                    height as u32,
+                    pixels.as_mut_ptr().cast::<c_void>(),
+                    &mut bitmap_info,
+                    DIB_RGB_COLORS,
+                );
+                if scan_lines == 0 {
+                    return Err("无法读取截图像素".to_string());
+                }
+                Ok(pixels)
+            };
+
             let printed = PrintWindow(hwnd, memory_dc, PW_RENDERFULLCONTENT);
-            if printed == 0 {
-                // 某些 GPU 加速应用不支持 PrintWindow，此时从屏幕 DC 回退捕获。
+            let mut bgra = if printed == 0 {
+                Vec::new()
+            } else {
+                read_bitmap()?
+            };
+
+            // WinUI、Chromium 和部分 GPU 窗口会让 PrintWindow 返回成功，却只绘制一张
+            // 全黑位图。此时目标窗口已经因客户端隐藏而位于前台，可以安全地从屏幕 DC
+            // 复制真实可见像素。
+            if printed == 0 || is_likely_blank_capture(&bgra) {
                 let screen_dc = GetWindowDC(null_mut::<c_void>() as HWND);
                 if screen_dc.is_null() {
                     return Err("前台窗口拒绝了截图".to_string());
@@ -126,29 +161,7 @@ fn capture_foreground_window() -> Result<WindowCapture, String> {
                 if copied == 0 {
                     return Err("无法复制前台窗口画面".to_string());
                 }
-            }
-
-            let mut bitmap_info = BITMAPINFO::default();
-            bitmap_info.bmiHeader.biSize = size_of::<windows_sys::Win32::Graphics::Gdi::BITMAPINFOHEADER>() as u32;
-            bitmap_info.bmiHeader.biWidth = width;
-            // 负高度让 GetDIBits 返回自上而下的像素，避免再做一次垂直翻转。
-            bitmap_info.bmiHeader.biHeight = -height;
-            bitmap_info.bmiHeader.biPlanes = 1;
-            bitmap_info.bmiHeader.biBitCount = 32;
-            bitmap_info.bmiHeader.biCompression = BI_RGB;
-
-            let mut bgra = vec![0u8; pixel_count * 4];
-            let scan_lines = GetDIBits(
-                memory_dc,
-                bitmap,
-                0,
-                height as u32,
-                bgra.as_mut_ptr().cast::<c_void>(),
-                &mut bitmap_info,
-                DIB_RGB_COLORS,
-            );
-            if scan_lines == 0 {
-                return Err("无法读取截图像素".to_string());
+                bgra = read_bitmap()?;
             }
 
             let rgb = bgra_to_rgb(&bgra);
@@ -190,7 +203,8 @@ fn capture_foreground_window() -> Result<WindowCapture, String> {
 
         let (jpeg, output_width, output_height) = capture_result?;
         let mut title_buffer = [0u16; 512];
-        let title_length = GetWindowTextW(hwnd, title_buffer.as_mut_ptr(), title_buffer.len() as i32);
+        let title_length =
+            GetWindowTextW(hwnd, title_buffer.as_mut_ptr(), title_buffer.len() as i32);
         let title = if title_length > 0 {
             String::from_utf16_lossy(&title_buffer[..title_length as usize])
         } else {
@@ -223,9 +237,22 @@ fn bgra_to_rgb(bgra: &[u8]) -> Vec<u8> {
     rgb
 }
 
+#[cfg(target_os = "windows")]
+fn is_likely_blank_capture(bgra: &[u8]) -> bool {
+    let mut samples = 0usize;
+    let mut visible_samples = 0usize;
+    for pixel in bgra.chunks_exact(4).step_by(64) {
+        samples += 1;
+        if pixel[0] > 12 || pixel[1] > 12 || pixel[2] > 12 {
+            visible_samples += 1;
+        }
+    }
+    samples == 0 || visible_samples * 200 < samples
+}
+
 #[cfg(all(test, target_os = "windows"))]
 mod tests {
-    use super::bgra_to_rgb;
+    use super::{bgra_to_rgb, is_likely_blank_capture};
 
     #[test]
     fn converts_windows_bgra_pixels_to_rgb() {
@@ -233,5 +260,18 @@ mod tests {
             bgra_to_rgb(&[10, 20, 30, 255, 1, 2, 3, 0]),
             vec![30, 20, 10, 3, 2, 1]
         );
+    }
+
+    #[test]
+    fn detects_empty_black_print_window_frames() {
+        assert!(is_likely_blank_capture(&vec![0; 640 * 480 * 4]));
+
+        let mut visible = vec![0; 640 * 480 * 4];
+        for pixel in visible.chunks_exact_mut(4).take(4000) {
+            pixel[0] = 240;
+            pixel[1] = 240;
+            pixel[2] = 240;
+        }
+        assert!(!is_likely_blank_capture(&visible));
     }
 }
