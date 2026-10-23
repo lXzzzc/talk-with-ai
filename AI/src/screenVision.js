@@ -1,4 +1,3 @@
-import { invoke } from '@tauri-apps/api/core'
 import { apiUrl } from './api.js'
 import { httpFetch } from './http.js'
 import { isDesktopRuntime } from './runtime.js'
@@ -7,7 +6,7 @@ export async function captureCurrentWindow() {
   if (!isDesktopRuntime()) {
     throw new Error('当前窗口截图仅支持昔涟 AI 桌面客户端')
   }
-  return await invoke('capture_active_window')
+  return await globalThis.xilianDesktop.invoke('capture_active_window')
 }
 
 export function dataUrlToBlob(dataUrl) {

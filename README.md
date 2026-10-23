@@ -278,20 +278,23 @@ docker compose up -d --build
 
 ## Windows 桌面客户端
 
-前端已接入 Tauri 2，可继续作为网站运行，也可以构建 Windows NSIS 安装包。桌面版默认连接
-`http://101.35.54.118`；构建其他环境时通过 `TALK_AI_DESKTOP_API_URL` 覆盖，密钥仍只保留在服务端。
+桌面端使用 Electron（内置 Chromium，不依赖系统 WebView2），可继续作为网站运行，也可以打包成
+免安装 exe 和 Windows NSIS 安装包。桌面版默认连接 `http://101.35.54.118`；构建其他环境时通过
+`TALK_AI_DESKTOP_API_URL` 覆盖，密钥仍只保留在服务端。
 
 ```powershell
 cd AI
 npm install
 $env:TALK_AI_DESKTOP_API_URL = 'https://你的域名'
-npm run desktop:build
+npm run desktop:electron:build
 ```
 
-安装包输出到 `AI/src-tauri/target/release/bundle/nsis/`。关闭主窗口时应用会隐藏到系统托盘，
+产物输出到 `releases/0.3.0/`：`XilianAI-0.3.0-x64-portable.exe` 可直接双击运行，
+`XilianAI-0.3.0-x64-setup.exe` 是一键安装包。重复构建的旧产物归档到 `releases/history/`。
+目录说明见 [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md)。关闭主窗口时应用会隐藏到系统托盘，
 托盘菜单可以重新显示或彻底退出；重复启动会激活已有窗口。
 
-本地调试桌面版可运行 `npm run desktop:dev`。它默认连接已部署服务器；同时在浏览器打开
+本地调试桌面版可运行 `npm run desktop:electron`。它默认连接已部署服务器；同时在浏览器打开
 `http://localhost:5173` 时，请求会通过 Vite 同源代理转发，不会把 localhost 的 Origin 发送给服务器。
 
 ### 打开本地软件
@@ -312,7 +315,7 @@ npm run desktop:build
 `open_application` 和 `inspect_current_window` 两个工具；模型的输出还会在服务端和客户端各做一次
 固定白名单与参数校验。规划接口不会写聊天记录，也没有执行本机工具的权限。
 
-命中工具后，客户端会显示工具名、参数和影响范围，用户确认后才调用 Tauri 本机命令或截图分析。
+命中工具后，客户端会显示工具名、参数和影响范围，用户确认后才调用 Electron 主进程命令或截图分析。
 打开软件只使用本机目录返回的不透明应用 ID，模型提供的名称不能作为路径或命令执行；窗口分析只做
 一次前台窗口截图。模型输出的路径、URL、Shell、点击、输入、文件操作等能力全部被拒绝。
 
@@ -344,26 +347,59 @@ npm run desktop:build
 `VOICE_ASR_URL` 留空时沿用 `DASHSCOPE_CHAT_URL` 的业务空间域名；
 也可以显式配置不带查询参数的 `wss://.../api-ws/v1/realtime`。
 本地入口是 `/voice/realtime`，Vite 的 `/api` 代理已经开启 WebSocket 转发。
-默认只接受本机开发和 Tauri 来源，并限制并发、音频速率和通话时长。
+默认只接受本机来源，并限制并发、音频速率和通话时长。
 
-同时启动本地后端后，桌面本地调试使用：
+同时启动本地后端时，把 Electron 内置代理指到本机 Spring 服务：
 
 ```powershell
 cd AI
-npm run desktop:dev -- --local
+$env:TALK_AI_DESKTOP_API_URL = 'http://localhost:8080'
+npm run desktop:electron
 ```
 
-该模式通过本机 Vite 访问 `localhost:8080`，不要另外重复启动占用 5173 的 Vite 进程。
 若将来部署公网，需要为 Nginx 配置 WebSocket Upgrade 转发、HTTPS/WSS、
 实际站点的 `VOICE_ALLOWED_ORIGINS`，并接入真实用户鉴权；当前改动仅在本机运行验证。
 
 ### 桌面端服务器连接
 
-桌面构建会把 `TALK_AI_DESKTOP_API_URL` 注入为 API 根地址。跨域请求通过 Tauri 原生 HTTP
-插件发送，并把 `Origin` 规范化为目标服务器自身来源，避免 WebView 的 `tauri.localhost`
-被服务端 CORS 拦截；默认允许 `http://101.35.54.118`，自定义服务器建议使用
-HTTPS，并需要按上面的命令重新构建安装包。
+`TALK_AI_DESKTOP_API_URL` 由 Electron 主进程读取，渲染进程只请求相对路径 `/api`，
+主进程再通过本机内置服务把请求代理到该地址，因此不经过浏览器 CORS。默认使用
+`http://101.35.54.118`，自定义服务器建议使用 HTTPS，并需要按上面的命令重新打包。
+`localhost:8080` 会自动识别为直接连接 Spring 并移除 `/api` 前缀；非标准直连地址可将
+`TALK_AI_DESKTOP_API_PATH_MODE` 设为 `spring`，经过 Nginx 的地址则可显式设为 `gateway`。
 
 ## License
 
 仅供学习交流使用。
+
+## 昔涟温柔动作桌宠（视频 v2）
+
+Electron 独立桌宠使用 `AI/src/VideoPetStage.vue`，素材位于 `AI/public/pets/xilian-video-v2/`。包含待机、行礼、轻憩、回眸、关切、倾听、祝福七段透明动画；两段源视频已有裁切的动作未加入。仅裁去左右透明留白以适配项目窗口，不修改人物服饰。主界面不再嵌入桌宠人物。
+
+待机播放权重为70%，六个随机动作各5%。桌宠工具栏提供「回应」及具体动作选择；聊天或通话实际播放语音时，切换到关切/倾听手势，语音结束后恢复待机，不模拟口型同步。支持系统减少动态效果设置，以静态首帧替代动画。
+
+Windows 推荐双击 `AI/start-desktop.vbs` 无窗口启动，构建和运行日志写入 `AI/desktop-launch.log`；`AI/start-desktop.cmd` 仅作为转发入口保留。若本机已有 DSH 的 Electron，无窗口入口会在当前进程中复用它，避免本机项目自带 Electron 的启动异常；不会修改全局环境或原有 DSH 配置。已有 `ELECTRON_OVERRIDE_DIST_PATH` 设置时优先保留。
+
+素材导入和检查（需要 ffmpeg、ffprobe、Python 的 numpy/Pillow）：
+
+```powershell
+cd AI
+python tools/pet-video/import_gentle_pack.py <已处理的xilian-animation目录>
+python tools/pet-video/verify_video_pet.py public/pets/xilian-video-v2 --report reports/video-pet
+npm test
+npm run build
+```
+
+Electron渲染验证：使用可用的 Electron 运行 `tools/pet-video/smoke_stage.cjs`，检查透明显示、点击、语音状态、动作选择和减少动态效果；结果输出到 `reports/video-pet/`。导入器仅使用已经处理好的七段WebM，不依赖 DSH 服务运行。
+
+桌宠随桌面客户端自动创建，无需启动独立 DSH 桌宠或另外运行素材目录中的脚本。本机应用扫描在窗口创建后后台进行，不阻塞桌宠显示。再次启动已运行的客户端会显示主窗口并恢复被隐藏的桌宠，沿用同一个实例。关闭主窗口会按原有托盘逻辑隐藏窗口；在托盘选择「退出」时，主窗口、通话窗口和桌宠一起结束。此处是随客户端启动，不设置系统开机自启。
+
+## 主界面动态壁纸
+
+`AI/src/AnimatedWallpaper.vue` 使用用户指定的 Steam Workshop 3593357539（「昔涟」）原有 Spine 4.2 动画与纹理。运行所需资源已复制到 `AI/public/wallpapers/xilian-workshop-3593357539/`，打包后无需安装 Steam 或读取原来的 D 盘目录。保留原壁纸的镜头参数，按窗口比例铺满背景，并使用明暗主题遮罩保证内容可读。没有导入或自动播放音乐。
+
+主界面原来的大号桌宠已移除，独立桌宠窗口及随客户端启动的行为保留。页面隐藏或系统开启减少动态效果时暂停骨骼动画；启动期间和 WebGL 不可用时使用同一壁纸的 2560×1440 高清首帧，动画实际绘制完成后再显示动态画面。
+
+运行 `tools/wallpaper/smoke_wallpaper.cjs` 可验证动态壁纸渲染、动画推进、主界面无桌宠视频请求、静音和窄屏布局，截图与结果输出到 `reports/wallpaper/`。
+
+动态壁纸默认启用 GPU/WebGL 硬件加速，启动器不再传入禁用 GPU 或关闭沙箱的参数。背景画布最高按1倍设备像素比和约1920×1080像素预算绘制，避免高DPI下过度渲染；仅影响背景采样，不影响文字清晰度。隐藏窗口或启用减少动态效果时停止壁纸渲染，恢复显示后继续播放。仅在排查显卡兼容性时可临时设置 TALK_AI_SOFTWARE_RENDERING=1（软件渲染会显著降低Spine壁纸帧率）。

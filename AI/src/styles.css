@@ -134,13 +134,16 @@
 }
 
 html {
-  min-height: 100%;
+  width: 100%;
+  height: 100%;
 }
 
 body,
 #app {
-  min-height: 100vh;
-  min-height: 100dvh;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 body {
@@ -203,13 +206,16 @@ button {
    整体布局
    ========================================================================= */
 
-/* 整体骨架：不再限制高度，交给文档自然滚动（滚轮 = 正常的上下翻页） */
+/* 桌面窗口保持固定视口；消息只在正文区内部滚动。 */
 .app {
   display: grid;
   grid-template-columns: 288px minmax(0, 1fr);
-  align-items: start;
-  min-height: 100vh;
-  min-height: 100dvh;
+  align-items: stretch;
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
   position: relative;
 }
 
@@ -485,8 +491,10 @@ button {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  min-height: 100vh;
-  min-height: 100dvh;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .chat-header {
@@ -797,12 +805,14 @@ button {
    消息区
    ========================================================================= */
 
-/* 正文区不再自己滚动，随文档一起长高 */
+/* 正文区独立滚动，避免 Electron 主窗口整体错位。 */
 .chat-body {
   flex: 1;
   display: flex;
   flex-direction: column;
+  min-height: 0;
   padding: 26px 24px 34px;
+  overflow-y: auto;
   overflow-x: clip;
 }
 
@@ -1279,10 +1289,10 @@ button {
    输入区
    ========================================================================= */
 
-/* 输入框吸在视口底部：页面滚动时始终可见，且不再把对话锁在一个小框里 */
+/* 输入区是固定布局的一部分，由正文区承担滚动。 */
 .composer-wrap {
-  position: sticky;
-  bottom: 0;
+  position: relative;
+  flex: none;
   z-index: 11;
   padding: 10px 24px 18px;
   background: linear-gradient(180deg, transparent 0%, var(--header-bg) 42%, var(--header-bg) 100%);
@@ -2273,6 +2283,13 @@ body {
   animation: character-float 5.8s ease-in-out infinite;
 }
 
+/* Animation stages need an explicit height; motion comes from their assets. */
+.hero-character-stage {
+  height: 430px;
+  animation: none;
+  filter: none;
+}
+
 .hero-star {
   position: absolute;
   color: rgba(255, 224, 248, 0.76);
@@ -2551,4 +2568,17 @@ body {
   .suggestion {
     min-height: 66px;
   }
+}
+
+/* The Workshop animation is the main-view background; leave space to see it. */
+.hero {
+  grid-template-columns: minmax(0, 1fr);
+  width: min(100%, 1040px);
+  gap: 0;
+}
+.hero-copy {
+  width: min(100%, 610px);
+}
+@media (max-width: 1100px) {
+  .hero { grid-template-columns: minmax(0, 1fr); }
 }

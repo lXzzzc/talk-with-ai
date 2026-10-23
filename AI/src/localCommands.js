@@ -1,4 +1,3 @@
-import { invoke } from '@tauri-apps/api/core'
 import { isDesktopRuntime } from './runtime.js'
 
 const SOURCE_LABELS = Object.freeze({
@@ -39,7 +38,7 @@ export function parseOpenApplicationCommand(input) {
 
 export async function openLocalApplication(applicationId) {
   if (!isDesktopRuntime()) throw new Error('打开本地软件仅支持桌面客户端')
-  return invoke('open_application', { application: applicationId })
+  return globalThis.xilianDesktop.invoke('open_application', { application: applicationId })
 }
 
 function normalizeApplication(application) {
@@ -54,20 +53,12 @@ function normalizeApplication(application) {
 
 export async function findLocalApplications(target) {
   if (!isDesktopRuntime()) throw new Error('搜索本地软件仅支持桌面客户端')
-  const applications = await invoke('search_applications', { query: target })
+  const applications = await globalThis.xilianDesktop.invoke('search_applications', { query: target })
   return Array.isArray(applications) ? applications.map(normalizeApplication) : []
 }
 
 export async function chooseLocalApplicationFile(alias) {
   if (!isDesktopRuntime()) throw new Error('添加本地软件仅支持桌面客户端')
-  const { open } = await import('@tauri-apps/plugin-dialog')
-  const path = await open({
-    multiple: false,
-    directory: false,
-    title: `选择“${alias}”的启动文件`,
-    filters: [{ name: 'Windows 软件', extensions: ['exe', 'lnk'] }]
-  })
-  if (!path || Array.isArray(path)) return null
-  const application = await invoke('register_application', { path, alias })
-  return normalizeApplication(application)
+  const application = await globalThis.xilianDesktop.invoke('choose_application_file', { alias })
+  return application ? normalizeApplication(application) : null
 }

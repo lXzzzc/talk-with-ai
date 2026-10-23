@@ -1,5 +1,4 @@
 import { isDesktopRuntime } from './runtime.js'
-import { invoke } from '@tauri-apps/api/core'
 
 export const VOICE_CONTEXT_KEY = 'talk-ai-voice-context'
 export const VOICE_CHANNEL = 'talk-ai-voice'
@@ -9,7 +8,7 @@ let popup = null
 export async function openVoiceCallWindow(context) {
   localStorage.setItem(VOICE_CONTEXT_KEY, JSON.stringify(context))
   if (isDesktopRuntime()) {
-    await invoke('open_voice_call', { conversationId: context.conversationId })
+    await globalThis.xilianDesktop.invoke('open_voice_call', { conversationId: context.conversationId })
     return
   }
   const url = new URL(window.location.href)

@@ -1,0 +1,7 @@
+{
+  "clips": [
+    { "id": "idle", "label": "自然待机", "start": 47.0, "duration": 1.0 },
+    { "id": "tap", "label": "微笑回应", "start": 43.0, "duration": 1.5 },
+    { "id": "talk", "label": "说话手势", "start": 45.6, "duration": 1.5 }
+  ]
+}

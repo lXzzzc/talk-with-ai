@@ -51,6 +51,12 @@ logs/
 META-INF/
 AI/src-tauri/target/
 
+# Local build history, QA captures and desktop release binaries
+/archive/
+/releases/
+AI/reports/
+AI/.codex-*/
+
 # ============================================================
 #  操作系统
 # ============================================================

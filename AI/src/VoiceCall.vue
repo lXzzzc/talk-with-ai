@@ -1,11 +1,13 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { setPetSpeaking } from './petSpeech.js'
 import { RealtimeVoiceCall } from './realtimeVoice.js'
 import { formatCallDuration } from './voiceProtocol.js'
 import { VOICE_CHANNEL, VOICE_CONTEXT_KEY } from './voiceCallWindow.js'
-import { isDesktopRuntime } from './runtime.js'
 
 const status = ref('idle')
+const speechId = Symbol('voice-call')
+watch(status, value => setPetSpeaking(speechId, value === 'speaking'))
 const muted = ref(false)
 const subtitles = ref(true)
 const level = ref(0)
@@ -31,7 +33,6 @@ let ticker = null
 let heartbeat = null
 let startedAt = 0
 let disposed = false
-let closeUnlisten = null
 
 function readContext() {
   try {
@@ -160,6 +161,7 @@ function interrupt() { call?.interrupt() }
 function dispose() {
   if (disposed) return
   hangup()
+  setPetSpeaking(speechId, false)
   announce(false)
   disposed = true
   clearInterval(ticker)
@@ -167,7 +169,6 @@ function dispose() {
   window.removeEventListener('storage', syncContext)
   window.removeEventListener('pagehide', dispose)
   channel?.close()
-  closeUnlisten?.()
 }
 
 onMounted(async () => {
@@ -189,10 +190,6 @@ onMounted(async () => {
     if (active.value && startedAt) duration.value = (Date.now() - startedAt) / 1000
   }, 1000)
   heartbeat = setInterval(() => announce(), 2000)
-  if (isDesktopRuntime()) {
-    const { getCurrentWindow } = await import('@tauri-apps/api/window')
-    if (!disposed) closeUnlisten = await getCurrentWindow().onCloseRequested(() => dispose())
-  }
 })
 
 onBeforeUnmount(() => { dispose(); document.body.classList.remove('voice-call-body') })

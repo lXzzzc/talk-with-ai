@@ -10,6 +10,13 @@
     <script>
       // 在首屏渲染前决定主题，避免深色用户看到一闪而过的白屏
       ;(function () {
+        var view = new URLSearchParams(window.location.search).get('view')
+        if (view === 'desktop-pet') {
+          document.documentElement.classList.add('desktop-pet-view')
+          document.documentElement.style.backgroundColor = 'transparent'
+          document.documentElement.style.colorScheme = 'dark'
+          return
+        }
         var theme = 'dark'
         try {
           theme =

@@ -7,6 +7,7 @@ import { openVoiceCallWindow, VOICE_CHANNEL, VOICE_CONTEXT_KEY } from './voiceCa
 import { httpFetch } from './http.js'
 import { withUserId } from './httpRouting.js'
 import ConfirmDeleteDialog from './ConfirmDeleteDialog.vue'
+import AnimatedWallpaper from './AnimatedWallpaper.vue'
 import {
   chooseLocalApplicationFile,
   findLocalApplications,
@@ -126,6 +127,7 @@ let voiceMaxTimer = null
 
 const ttsEnabled = ref(true)
 const ttsSpokenPositions = ref({})
+/** 0..1, driven by the TTS analyser once the Live2D model is enabled. */
 
 const activeConversation = computed(
   () => conversations.value.find((item) => item.id === activeConversationId.value) || null
@@ -613,7 +615,7 @@ function jumpToBottom() {
 
 function stopRequest() {
   abortController?.abort()
-  ttsAbortController?.abort()
+  stopAllTts()
 }
 
 function stopAllTts() {
@@ -626,6 +628,12 @@ function stopAllTts() {
 }
 
 function processTtsQueue() {
+  if (!ttsEnabled.value) {
+    ttsQueue.length = 0
+    speakingIndex.value = null
+    ttsPlaying = false
+    return
+  }
   if (ttsPlaying || ttsQueue.length === 0) return
   ttsPlaying = true
   const item = ttsQueue.shift()
@@ -658,6 +666,7 @@ async function synthesizeMessageAudio(text, signal) {
 }
 
 function enqueueAudioBlobs(blobs, index, signal) {
+  if (!ttsEnabled.value || signal?.aborted) return
   for (const blob of blobs) {
     if (blob?.size) ttsQueue.push({ blob, signal, index })
   }
@@ -782,11 +791,15 @@ function flushTtsTail(messageIndex, content) {
   enqueueTts(content.slice(lastPos), messageIndex)
 }
 
-/** 手动朗读整条回复。 */
+/** 手动朗读整条回复；正在朗读或排队时再点一次就是停止。 */
 function speakMessage(index, message) {
   if (voiceCallActive.value) return
   const text = (message.content || '').trim()
   if (!text) return
+  if (speakingIndex.value === index || ttsQueue.some((item) => item.index === index)) {
+    stopAllTts()
+    return
+  }
   stopAllTts()
   ttsAbortController = new AbortController()
   ttsSpokenPositions.value = { ...ttsSpokenPositions.value, [index]: text.length }
@@ -868,13 +881,14 @@ async function runStream(conversation, prompt, { appendUser, localAction = null 
 
     const finalText = generatedContent.trim()
     let audioBlobs = []
+    let ttsSignal = null
 
     if (ttsEnabled.value && finalText) {
       responseStage.value = 'synthesizing'
-      const signal = ttsAbortController?.signal || new AbortController().signal
+      ttsSignal = ttsAbortController?.signal || new AbortController().signal
       try {
         // 所有音频片段合成成功后才显示完整文字回复。
-        audioBlobs = await synthesizeMessageAudio(finalText, signal)
+        audioBlobs = await synthesizeMessageAudio(finalText, ttsSignal)
       } catch (error) {
         if (error?.name === 'AbortError') throw error
         // 合成服务故障时仍允许用户看到回复，避免消息永久卡在加载态。
@@ -887,9 +901,9 @@ async function runStream(conversation, prompt, { appendUser, localAction = null 
     messages.value = conversation.messages
     await scrollToBottom()
 
-    if (audioBlobs.length > 0) {
-      const signal = ttsAbortController?.signal || new AbortController().signal
-      enqueueAudioBlobs(audioBlobs, messageIndex, signal)
+    // 合成期间用户可能已经关闭自动朗读或停止生成，此时不能再把旧音频塞回队列。
+    if (audioBlobs.length > 0 && ttsEnabled.value && ttsSignal && !ttsSignal.aborted) {
+      enqueueAudioBlobs(audioBlobs, messageIndex, ttsSignal)
     }
   } catch (error) {
     if (error.name === 'AbortError') {
@@ -1122,11 +1136,12 @@ async function analyzeCurrentWindowPrompt(prompt, options = {}) {
     if (!answer) throw new Error('图片分析服务没有返回内容')
 
     let audioBlobs = []
+    let ttsSignal = null
     if (ttsEnabled.value) {
       responseStage.value = 'synthesizing'
-      const signal = ttsAbortController?.signal || new AbortController().signal
+      ttsSignal = ttsAbortController?.signal || new AbortController().signal
       try {
-        audioBlobs = await synthesizeMessageAudio(answer, signal)
+        audioBlobs = await synthesizeMessageAudio(answer, ttsSignal)
       } catch (error) {
         if (error?.name === 'AbortError') throw error
         showToast(error?.message || '语音合成失败，已显示文字回复')
@@ -1138,9 +1153,8 @@ async function analyzeCurrentWindowPrompt(prompt, options = {}) {
     messages.value = conversation.messages
     await scrollToBottom(true)
 
-    if (audioBlobs.length > 0) {
-      const signal = ttsAbortController?.signal || new AbortController().signal
-      enqueueAudioBlobs(audioBlobs, messageIndex, signal)
+    if (audioBlobs.length > 0 && ttsEnabled.value && ttsSignal && !ttsSignal.aborted) {
+      enqueueAudioBlobs(audioBlobs, messageIndex, ttsSignal)
     }
   } catch (error) {
     if (error?.name === 'AbortError') return
@@ -1501,7 +1515,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="app">
-    <div class="backdrop" aria-hidden="true"></div>
+    <AnimatedWallpaper />
 
     <aside class="sidebar" :class="{ open: sidebarOpen }">
       <div class="brand">
@@ -1735,16 +1749,6 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <div class="hero-visual" aria-hidden="true">
-            <div class="hero-halo"></div>
-            <span class="hero-orbit hero-orbit-one"></span>
-            <span class="hero-orbit hero-orbit-two"></span>
-            <span class="hero-star hero-star-one">✦</span>
-            <span class="hero-star hero-star-two">✧</span>
-            <span class="hero-star hero-star-three">·</span>
-            <img class="hero-character" src="/xilian-chibi.png" alt="" />
-            <div class="hero-presence"><span></span>昔涟已连接</div>
-          </div>
         </div>
 
         <div v-else class="thread">
@@ -1792,13 +1796,14 @@ onBeforeUnmount(() => {
                     class="action-btn"
                     :class="{ active: speakingIndex === index }"
                     type="button"
+                    :title="speakingIndex === index ? '停止朗读' : '朗读这条回复'"
                     @click="speakMessage(index, message)"
                   >
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
                       <path d="M11 5 6.5 9H3v6h3.5L11 19z" />
                       <path d="M15.5 8.5a5 5 0 0 1 0 7" />
                     </svg>
-                    {{ speakingIndex === index ? '朗读中' : '朗读' }}
+                    {{ speakingIndex === index ? '停止' : '朗读' }}
                   </button>
 
                   <button

@@ -1,0 +1,137 @@
+{
+  "version": 2,
+  "renderer": "alpha-video",
+  "canvas": {
+    "width": 360,
+    "height": 360
+  },
+  "anchor": {
+    "x": 180,
+    "feetY": 330
+  },
+  "actions": {
+    "idle": {
+      "id": "idle",
+      "label": "安静陪伴",
+      "file": "idle-v2.webm",
+      "duration": 10,
+      "fps": 24,
+      "frames": 240,
+      "sha256": "fe9394f93d7942a6c5bf833ab2188f95243b1e2c3eabe34f407457e772177090",
+      "sourceSha256": "3253406f6c6fd399b840e05c4d2742f7efab081d3aa541cb9a2723779dccc43a"
+    },
+    "greeting": {
+      "id": "greeting",
+      "label": "温柔行礼",
+      "file": "greeting-v2.webm",
+      "duration": 10,
+      "fps": 24,
+      "frames": 240,
+      "sha256": "eb0e6aa509b1225a7e75b25d991cf5c9ecd0b93f2f71542af12075b4b0606c67",
+      "sourceSha256": "36e825d963a9cba9779d27ec20c9830b0cbecf581968b3e8d502861e334afdc5"
+    },
+    "rest": {
+      "id": "rest",
+      "label": "倦意轻憩",
+      "file": "rest-v2.webm",
+      "duration": 10,
+      "fps": 24,
+      "frames": 240,
+      "sha256": "8c4b8dbe3cfe05e7d176c4a316f5ff949c646385f1b41ec54ff0d06dc60b90f3",
+      "sourceSha256": "e847551bb7f7dc320f5d05c9a0e823c77db206008e246baf927e4489102787cb"
+    },
+    "glance": {
+      "id": "glance",
+      "label": "轻轻回眸",
+      "file": "glance-v2.webm",
+      "duration": 10,
+      "fps": 24,
+      "frames": 240,
+      "sha256": "14128fd659a9a605a074f8df4aa41b782f210b3b8a336705673eedf9b83df8ed",
+      "sourceSha256": "9eebc969073134171ca1b6788508850ff26843c0b3ada22b14571174db2569ec"
+    },
+    "care": {
+      "id": "care",
+      "label": "温柔关切",
+      "file": "care-v2.webm",
+      "duration": 10,
+      "fps": 24,
+      "frames": 240,
+      "sha256": "fbeec653847c448278cd3b11964330e4589ac186e0e88917b6f4a96920160a92",
+      "sourceSha256": "7d25ee6f11371082c2c516c597f845f8f1109a42597140e372055ca5fd15649e"
+    },
+    "listen": {
+      "id": "listen",
+      "label": "静静倾听",
+      "file": "listen-v2.webm",
+      "duration": 10,
+      "fps": 24,
+      "frames": 240,
+      "sha256": "6d855ca50a79ca60c300f8fab2f261075714e89a518e37fcf595918b5e4da4ad",
+      "sourceSha256": "4d78e1a5da7a81daf1fcd821eabfc5455e77673837b738ec453409a2f027c80d"
+    },
+    "blessing": {
+      "id": "blessing",
+      "label": "无声祝福",
+      "file": "blessing-v2.webm",
+      "duration": 10,
+      "fps": 24,
+      "frames": 240,
+      "sha256": "60ac854c3c25c693bd6b34c8200cad9385b2178ecd4821f8a3972459b43a79fb",
+      "sourceSha256": "373a2d9fcd5630b6189bc2470b827ef40c7fc46d1b9835cbabd26c218fc03d7f"
+    }
+  },
+  "pools": {
+    "ambient": [
+      {
+        "action": "idle",
+        "weight": 70
+      },
+      {
+        "action": "greeting",
+        "weight": 5
+      },
+      {
+        "action": "rest",
+        "weight": 5
+      },
+      {
+        "action": "glance",
+        "weight": 5
+      },
+      {
+        "action": "care",
+        "weight": 5
+      },
+      {
+        "action": "listen",
+        "weight": 5
+      },
+      {
+        "action": "blessing",
+        "weight": 5
+      }
+    ],
+    "tap": [
+      {
+        "action": "care",
+        "weight": 1
+      },
+      {
+        "action": "listen",
+        "weight": 1
+      }
+    ],
+    "speech": [
+      {
+        "action": "care",
+        "weight": 1
+      },
+      {
+        "action": "listen",
+        "weight": 1
+      }
+    ]
+  },
+  "notes": "温柔人设；语音播放使用回应手势，无口型同步。含蓄欢喜与羞涩浅笑因源视频裁切未导入。"
+}

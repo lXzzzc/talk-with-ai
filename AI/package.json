@@ -1,29 +1,75 @@
 {
   "name": "spring-ai-test-client",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
+  "description": "昔涟 AI 桌面客户端",
+  "author": "Xzzz",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
-    "build:desktop": "node scripts/build-desktop.mjs",
-    "desktop:dev": "node scripts/dev-desktop.mjs",
-    "desktop:build": "tauri build",
+    "desktop": "node scripts/run-electron.mjs",
+    "desktop:electron": "node scripts/run-electron.mjs",
+    "desktop:electron:build": "node scripts/build-electron.mjs",
     "preview": "vite preview --host 0.0.0.0",
-    "test": "node --test src/*.test.js",
-    "tauri": "tauri"
+    "test": "node --test src/*.test.js electron/*.test.cjs"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.12.4",
-    "@tauri-apps/plugin-dialog": "^2.4.0",
-    "@tauri-apps/plugin-http": "^2.8.3",
+    "@pixi/sound": "^6.0.1",
+    "http-proxy": "^1.18.1",
+    "pixi.js": "8.15.0",
+    "untitled-pixi-live2d-engine": "1.2.2"
+  },
+  "devDependencies": {
     "@vitejs/plugin-vue": "^5.2.4",
     "dompurify": "^3.4.16",
+    "electron": "43.3.0",
+    "electron-builder": "^26.0.12",
     "marked": "^18.0.14",
     "vite": "^6.3.5",
     "vue": "^3.5.17"
   },
-  "devDependencies": {
-    "@tauri-apps/cli": "^2.9.6"
+  "main": "electron/main.cjs",
+  "build": {
+    "appId": "com.xzzz.talkwithai.electron",
+    "productName": "昔涟 AI",
+    "asar": true,
+    "electronDist": "node_modules/electron/dist",
+    "directories": {
+      "output": "../releases/${version}",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false,
+      "shortcutName": "昔涟 AI",
+      "artifactName": "XilianAI-${version}-${arch}-setup.${ext}"
+    },
+    "portable": {
+      "artifactName": "XilianAI-${version}-${arch}-portable.${ext}"
+    }
   }
 }
