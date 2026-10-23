@@ -1,9 +1,11 @@
 <script setup>
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { subscribePetSpeech } from './petSpeech.js'
+import { subscribePetActivity } from './petActivity.js'
 import { VIDEO_PET_ROOT as ROOT, pickPetAction, validatePetManifest } from './videoPetActions.js'
 
-const props = defineProps({ interactive: { type: Boolean, default: false } })
+const props = defineProps({ interactive: { type: Boolean, default: false },
+  initialAction: { type: String, default: 'idle' }, ambient: { type: Boolean, default: true } })
 const emit = defineEmits(['ready', 'error'])
 const videos = []
 const activeSlot = ref(-1)
@@ -15,10 +17,13 @@ let manifest = null
 let revision = 0
 let disposed = false
 let speaking = false
+let activity = 'idle'
+const phase = ref('idle')
 let temporaryAction = false
 let playbackMode = 'ambient'
 let cancelPending = null
 let unsubscribe = null
+let unsubscribeActivity = null
 let motionPreference = null
 let reducedMotion = false
 
@@ -97,7 +102,7 @@ async function switchAction(action, force = false) {
 }
 
 function playAction(action) {
-  if (!manifest || speaking || reducedMotion) return
+  if (!manifest || speaking || activity !== 'idle' || reducedMotion) return
   temporaryAction = true
   playbackMode = 'tap'
   void switchAction(typeof action === 'string' && manifest.actions[action]
@@ -107,8 +112,7 @@ function playAction(action) {
 function onEnded(slot) {
   if (slot !== activeSlot.value || !manifest) return
   temporaryAction = false
-  playbackMode = speaking ? 'speech' : 'ambient'
-  void switchAction(pickPetAction(manifest, playbackMode), true)
+  void switchAction(contextAction(true), true)
 }
 
 function onVideoError(slot) {
@@ -122,11 +126,21 @@ function onVideoError(slot) {
 function onSpeech(value) {
   if (speaking === value) return
   speaking = value
-  if (speaking) temporaryAction = false
-  if (!temporaryAction && manifest) {
-    playbackMode = speaking ? 'speech' : 'ambient'
-    void switchAction(speaking ? pickPetAction(manifest, 'speech') : 'idle', true)
-  }
+  updateContext()
+}
+
+function contextAction(ended = false) {
+  if (!props.ambient) return props.initialAction
+  if (speaking) return 'care'
+  if (activity === 'typing' || activity === 'listening') return 'listen'
+  if (activity === 'thinking') return 'idle'
+  return ended ? pickPetAction(manifest, 'ambient') : 'idle'
+}
+
+function updateContext() {
+  phase.value = speaking ? 'speaking' : activity
+  if (phase.value !== 'idle') temporaryAction = false
+  if (!temporaryAction && manifest) void switchAction(contextAction())
 }
 
 function onMotionPreference(event) {
@@ -137,20 +151,27 @@ function onMotionPreference(event) {
   activeSlot.value = -1
   temporaryAction = false
   playbackMode = speaking ? 'speech' : 'ambient'
-  if (!reducedMotion && manifest) void switchAction(speaking ? pickPetAction(manifest, 'speech') : 'idle', true)
+  if (!reducedMotion && manifest) void switchAction(contextAction(), true)
 }
 
 onMounted(async () => {
   motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)')
   reducedMotion = motionPreference.matches
   motionPreference.addEventListener('change', onMotionPreference)
-  unsubscribe = subscribePetSpeech(onSpeech)
+  if (props.ambient) {
+    unsubscribe = subscribePetSpeech(onSpeech)
+    unsubscribeActivity = subscribePetActivity(value => {
+      if (activity === value) return
+      activity = value
+      updateContext()
+    })
+  }
   try {
     const response = await fetch(`${ROOT}manifest.json`, { signal: controller.signal, cache: 'no-store' })
     if (!response.ok) throw new Error('桌宠素材清单加载失败')
     manifest = validatePetManifest(await response.json())
     playbackMode = speaking ? 'speech' : 'ambient'
-    await switchAction(speaking ? pickPetAction(manifest, 'speech') : 'idle')
+    await switchAction(contextAction())
     if (!disposed && !reducedMotion) {
       for (const entry of [...manifest.pools.tap, ...manifest.pools.speech]) {
         void assetUrl(entry.action).catch(() => {})
@@ -169,6 +190,7 @@ onBeforeUnmount(() => {
   cancelPending?.()
   controller.abort()
   unsubscribe?.()
+  unsubscribeActivity?.()
   motionPreference?.removeEventListener('change', onMotionPreference)
   for (const video of videos) { video?.pause(); video?.removeAttribute('src'); video?.load() }
   for (const pending of blobUrls.values()) void pending.then(url => URL.revokeObjectURL(url)).catch(() => {})
@@ -179,7 +201,7 @@ defineExpose({ playAction })
 </script>
 
 <template>
-  <div class="video-pet-stage" :data-action="currentAction" :data-renderer="failed ? 'poster' : 'alpha-video'"
+  <div class="video-pet-stage" :data-action="currentAction" :data-state="phase" :data-renderer="failed ? 'poster' : 'alpha-video'"
     :role="props.interactive ? 'button' : 'img'" :tabindex="props.interactive ? 0 : undefined"
     aria-label="昔涟" @click="props.interactive && playAction()"
     @keydown.enter="props.interactive && playAction()" @keydown.space.prevent="props.interactive && playAction()">

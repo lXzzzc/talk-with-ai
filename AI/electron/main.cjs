@@ -7,6 +7,7 @@ const { execFile, spawn } = require('node:child_process')
 const httpProxy = require('http-proxy')
 const { resolveApiPathMode, rewriteApiRequestUrl } = require('./proxy-routing.cjs')
 const { startDesktopWindows, showDesktopWindows } = require('./desktop-startup.cjs')
+const { bubblePosition, dragPosition } = require('./pet-geometry.cjs')
 
 const API_ORIGIN = String(process.env.TALK_AI_DESKTOP_API_URL || 'http://101.35.54.118').trim().replace(/\/+$/, '')
 const MAX_QUERY_CHARS = 100
@@ -30,6 +31,19 @@ const MIME_TYPES = Object.freeze({
 let mainWindow = null
 let voiceWindow = null
 let petWindow = null
+let bubbleWindow = null
+let splashWindow = null
+let bubbleState = { mode: 'response', line: '嗯，我在。' }
+let bubbleTimer = null
+let dragState = null
+let dragTimer = null
+let startupPending = true
+let mainPainted = false
+let wallpaperReady = false
+let splashFinished = false
+let startupTimer = null
+let bubbleReady = false
+let bubbleWanted = false
 let tray = null
 let localServer = null
 let localOrigin = ''
@@ -309,7 +323,31 @@ function secureWindow(window) {
   })
 }
 
+function keepCompanionsOnTop() {
+  // Floating sits below the Windows taskbar. Keep both companion windows in
+  // the higher overlay layer, raising the bubble last without taking focus.
+  for (const window of [petWindow, bubbleWindow]) {
+    if (!window || window.isDestroyed()) continue
+    window.setAlwaysOnTop(true, 'screen-saver')
+    if (window.isVisible()) window.moveTop()
+  }
+}
+
+function showPetInactive() {
+  const window = petWindow
+  if (!window || window.isDestroyed()) return
+  window.showInactive()
+  keepCompanionsOnTop()
+  // A hidden Windows launcher may consume the first native ShowWindow call.
+  if (!window.isVisible()) setImmediate(() => {
+    if (window.isDestroyed() || quitting || startupPending || petWindow !== window) return
+    window.showInactive()
+    keepCompanionsOnTop()
+  })
+}
+
 function createMainWindow() {
+  createSplashWindow()
   mainWindow = new BrowserWindow({
     title: '昔涟 AI',
     width: 1280,
@@ -327,7 +365,8 @@ function createMainWindow() {
     }
   })
   secureWindow(mainWindow)
-  mainWindow.once('ready-to-show', () => mainWindow.show())
+  mainWindow.on('focus', keepCompanionsOnTop)
+  mainWindow.once('ready-to-show', () => { mainPainted = true; revealStartup() })
   mainWindow.on('close', event => {
     if (!quitting) {
       event.preventDefault()
@@ -335,6 +374,116 @@ function createMainWindow() {
     }
   })
   mainWindow.loadURL(localOrigin)
+  // Startup never depends on the chat/history API or an animation decoder.
+  startupTimer = setTimeout(() => {
+    mainPainted = true; wallpaperReady = true; splashFinished = true; revealStartup()
+  }, 7000)
+}
+
+function createSplashWindow() {
+  try {
+    const preferences = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'startup-preferences.json'), 'utf8'))
+    if (preferences.disabled) { splashFinished = true; return }
+  } catch { /* First launch uses the welcome animation. */ }
+  splashWindow = new BrowserWindow({ width: 760, height: 480, show: false, frame: false,
+    transparent: true, backgroundColor: '#00000000', resizable: false, maximizable: false,
+    fullscreenable: false, webPreferences: { preload: path.join(__dirname, 'preload.cjs'),
+      contextIsolation: true, nodeIntegration: false, sandbox: true } })
+  secureWindow(splashWindow)
+  splashWindow.once('ready-to-show', () => { if (!splashFinished) splashWindow?.show() })
+  splashWindow.on('closed', () => { splashWindow = null; splashFinished = true; revealStartup() })
+  splashWindow.loadURL(`${localOrigin}?view=splash`)
+}
+
+function revealStartup() {
+  if (!startupPending || !mainPainted || !wallpaperReady || !splashFinished || quitting) return
+  startupPending = false
+  clearTimeout(startupTimer)
+  splashWindow?.destroy()
+  mainWindow?.show()
+  // A hidden VBS/PowerShell launcher can supply SW_HIDE for the first native
+  // ShowWindow call. Retry once after that startup state has been consumed.
+  if (mainWindow && !mainWindow.isVisible()) setImmediate(() => { if (!quitting && !mainWindow?.isDestroyed()) mainWindow?.show() })
+  showPetInactive()
+}
+
+function positionBubble() {
+  if (!bubbleWindow || bubbleWindow.isDestroyed() || !petWindow || petWindow.isDestroyed()) return
+  const bounds = petWindow.getBounds()
+  const area = screen.getDisplayMatching(bounds).workArea
+  const [width, height] = bubbleWindow.getSize()
+  const position = bubblePosition(bounds, { width, height }, area)
+  bubbleWindow.setPosition(position.x, position.y)
+}
+
+function hideBubble() {
+  bubbleWanted = false
+  clearTimeout(bubbleTimer)
+  if (!bubbleWindow || bubbleWindow.isDestroyed()) return
+  bubbleWindow.webContents.send('desktop:pet-event', { type: 'bubble-hidden' })
+  bubbleWindow.hide()
+}
+
+function showBubble(mode = 'chat') {
+  if (!petWindow || petWindow.isDestroyed()) return
+  if (mode === 'response' && bubbleWindow?.isVisible() && bubbleState.mode === 'chat') return
+  clearTimeout(bubbleTimer)
+  bubbleWanted = true
+  const lines = ['嗯，我在。', '有什么想说的吗？我听着。', '慢慢来，我会陪着你。', '见到你，真好。']
+  bubbleState = { mode, line: lines[Math.floor(Math.random() * lines.length)] }
+  const height = mode === 'chat' ? Math.min(470, screen.getDisplayMatching(petWindow.getBounds()).workArea.height - 16) : 164
+  const present = () => {
+    if (!bubbleWanted || !bubbleReady || !bubbleWindow || bubbleWindow.isDestroyed()) return
+    bubbleWindow.webContents.send('desktop:pet-event', { type: 'bubble-state', ...bubbleState })
+    if (bubbleState.mode === 'chat') { bubbleWindow.show(); bubbleWindow.focus() }
+    else {
+      bubbleWindow.showInactive()
+      clearTimeout(bubbleTimer)
+      bubbleTimer = setTimeout(hideBubble, 4800)
+    }
+  }
+  if (!bubbleWindow || bubbleWindow.isDestroyed()) {
+    bubbleReady = false
+    bubbleWindow = new BrowserWindow({ title: '昔涟气泡对话', width: 360, height, show: false, frame: false,
+      transparent: true, backgroundColor: '#00000000', hasShadow: false,
+      resizable: false, maximizable: false, fullscreenable: false, skipTaskbar: true, alwaysOnTop: true,
+      webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true,
+        nodeIntegration: false, sandbox: true } })
+    secureWindow(bubbleWindow)
+    keepCompanionsOnTop()
+    bubbleWindow.on('page-title-updated', event => event.preventDefault())
+    bubbleWindow.on('show', keepCompanionsOnTop)
+    bubbleWindow.on('restore', keepCompanionsOnTop)
+    bubbleWindow.once('ready-to-show', () => { bubbleReady = true; present() })
+    bubbleWindow.on('closed', () => { bubbleWindow = null; bubbleReady = false; bubbleWanted = false; clearTimeout(bubbleTimer) })
+    bubbleWindow.loadURL(`${localOrigin}?view=pet-chat`)
+  } else {
+    bubbleWindow.setSize(360, height)
+    present()
+  }
+  positionBubble()
+}
+
+function endPetDrag() {
+  clearInterval(dragTimer)
+  dragTimer = null
+  const dragged = Boolean(dragState?.dragged)
+  dragState = null
+  savePetPosition()
+  return { dragged }
+}
+
+function beginPetDrag() {
+  endPetDrag()
+  if (!petWindow || petWindow.isDestroyed()) return
+  dragState = { cursor: screen.getCursorScreenPoint(), bounds: petWindow.getBounds(), dragged: false, at: Date.now() }
+  dragTimer = setInterval(() => {
+    if (!petWindow || petWindow.isDestroyed() || Date.now() - dragState.at > 15000) { endPetDrag(); return }
+    const cursor = screen.getCursorScreenPoint()
+    const result = dragPosition(dragState, cursor, screen.getDisplayNearestPoint(cursor).workArea)
+    dragState.dragged ||= result.dragged
+    if (dragState.dragged) petWindow.setPosition(result.x, result.y)
+  }, 16)
 }
 
 function createVoiceWindow(conversationId) {
@@ -403,7 +552,7 @@ function savePetPosition() {
 
 function createPetWindow() {
   if (petWindow && !petWindow.isDestroyed()) {
-    petWindow.showInactive()
+    showPetInactive()
     return
   }
 
@@ -420,7 +569,7 @@ function createPetWindow() {
     minHeight: height,
     maxWidth: width,
     maxHeight: height,
-    show: true,
+    show: false,
     frame: false,
     transparent: true,
     backgroundColor: '#00000000',
@@ -437,18 +586,22 @@ function createPetWindow() {
       sandbox: true
     }
   })
-  petWindow.setAlwaysOnTop(true, 'floating')
-  petWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: false })
+  keepCompanionsOnTop()
+  petWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   secureWindow(petWindow)
-  petWindow.once('ready-to-show', () => petWindow?.showInactive())
-  petWindow.on('moved', savePetPosition)
+  petWindow.on('page-title-updated', event => event.preventDefault())
+  petWindow.on('show', keepCompanionsOnTop)
+  petWindow.on('restore', keepCompanionsOnTop)
+  petWindow.once('ready-to-show', () => { if (!startupPending) showPetInactive() })
+  petWindow.on('moved', () => { positionBubble(); if (!dragState) savePetPosition() })
+  petWindow.on('hide', hideBubble)
   petWindow.on('close', event => {
     if (!quitting) {
       event.preventDefault()
       petWindow.hide()
     }
   })
-  petWindow.on('closed', () => { petWindow = null })
+  petWindow.on('closed', () => { endPetDrag(); bubbleWindow?.destroy(); petWindow = null })
   petWindow.loadURL(`${localOrigin}?view=desktop-pet`)
 }
 
@@ -458,7 +611,7 @@ function togglePetWindow() {
     return
   }
   if (petWindow.isVisible()) petWindow.hide()
-  else petWindow.showInactive()
+  else showPetInactive()
 }
 
 function createTray() {
@@ -552,12 +705,28 @@ function startLocalServer() {
       }
       else socket.destroy()
     })
-    localServer.once('error', reject)
-    localServer.listen(0, '127.0.0.1', () => {
+    // Keep a stable loopback origin between launches so localStorage (including
+    // user identity, pet conversation and preferences) survives a restart.
+    const portFile = path.join(app.getPath('userData'), 'desktop-server-port.json')
+    let preferredPort = 0
+    try {
+      const saved = JSON.parse(fs.readFileSync(portFile, 'utf8')).port
+      if (Number.isInteger(saved) && saved > 0 && saved <= 65535) preferredPort = saved
+    } catch { /* Choose an available port on the first launch. */ }
+    let retrying = false
+    localServer.on('error', error => {
+      if (error.code === 'EADDRINUSE' && preferredPort && !retrying) {
+        retrying = true
+        localServer.listen(0, '127.0.0.1')
+      } else reject(error)
+    })
+    localServer.once('listening', () => {
       const address = localServer.address()
       localOrigin = `http://127.0.0.1:${address.port}/`
+      try { fs.writeFileSync(portFile, JSON.stringify({ port: address.port }), 'utf8') } catch (error) { console.warn('Unable to save local server port:', error.message) }
       resolve()
     })
+    localServer.listen(preferredPort, '127.0.0.1')
   })
 }
 
@@ -571,17 +740,43 @@ function registerDesktopCommands() {
     if (!/^[A-Za-z0-9_-]{1,128}$/.test(conversationId)) throw new Error('无效的通话会话')
     createVoiceWindow(conversationId)
   })
-  ipcMain.handle('desktop:pet_open_chat', () => {
+  ipcMain.handle('desktop:pet_open_chat', (_event, args) => {
     focusMainWindow()
+    if (/^[\w-]{1,128}$/.test(args?.conversationId || '')) {
+      mainWindow?.webContents.send('desktop:pet-event', { type: 'open-conversation', conversationId: args.conversationId })
+    }
     return true
   })
   ipcMain.handle('desktop:pet_hide', () => {
+    endPetDrag()
     petWindow?.hide()
     return true
+  })
+  const fromPet = event => event.sender === petWindow?.webContents
+  const fromBubble = event => event.sender === bubbleWindow?.webContents
+  ipcMain.handle('desktop:pet_respond', event => { if (fromPet(event)) showBubble('response') })
+  ipcMain.handle('desktop:pet_open_bubble', event => { if (fromPet(event) || fromBubble(event)) showBubble('chat') })
+  ipcMain.handle('desktop:pet_close_bubble', event => { if (fromBubble(event)) hideBubble() })
+  ipcMain.handle('desktop:pet_bubble_state', event => fromBubble(event) ? bubbleState : null)
+  ipcMain.handle('desktop:pet_drag_begin', event => { if (fromPet(event)) beginPetDrag() })
+  ipcMain.handle('desktop:pet_drag_end', event => fromPet(event) ? endPetDrag() : { dragged: false })
+  ipcMain.handle('desktop:startup_ready', event => {
+    if (event.sender === mainWindow?.webContents) { wallpaperReady = true; revealStartup() }
+  })
+  ipcMain.handle('desktop:splash_finish', (event, args) => {
+    if (event.sender !== splashWindow?.webContents) return
+    if (args?.disable === true) {
+      try { fs.writeFileSync(path.join(app.getPath('userData'), 'startup-preferences.json'), JSON.stringify({ disabled: true }), 'utf8') }
+      catch (error) { console.warn('Unable to save startup preference:', error.message) }
+    }
+    splashFinished = true
+    revealStartup()
+    splashWindow?.hide()
   })
 }
 
 function focusMainWindow() {
+  if (startupPending) { splashFinished = true; revealStartup() }
   mainWindow?.show()
   mainWindow?.restore()
   mainWindow?.focus()
@@ -654,7 +849,7 @@ claimInstance().then(async server => {
   })
 })
 
-app.on('before-quit', () => { quitting = true })
+app.on('before-quit', () => { quitting = true; clearTimeout(startupTimer); clearTimeout(bubbleTimer); endPetDrag() })
 app.on('activate', () => {
   if (app.isReady() && localOrigin) showDesktopClient()
 })

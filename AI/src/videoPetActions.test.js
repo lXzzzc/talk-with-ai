@@ -8,7 +8,7 @@ const manifest = JSON.parse(readFileSync(new URL('manifest.json', assetRoot), 'u
 
 test('published pack has complete pools and only approved, existing assets', () => {
   assert.equal(validatePetManifest(manifest), manifest)
-  assert.equal(Object.keys(manifest.actions).length, 7)
+  assert.equal(Object.keys(manifest.actions).length, 8)
   for (const action of Object.values(manifest.actions)) assert.ok(existsSync(new URL(action.file, assetRoot)))
   assert.ok(!Object.values(manifest.actions).some(action => /羞涩|欢喜/.test(action.label)))
 })
@@ -17,7 +17,9 @@ test('ambient weights favour idle but allow every available gesture', () => {
   assert.equal(pickPetAction(manifest, 'ambient', () => 0), 'idle')
   assert.equal(pickPetAction(manifest, 'ambient', () => 0.699), 'idle')
   assert.equal(pickPetAction(manifest, 'ambient', () => 0.70), 'greeting')
-  assert.equal(pickPetAction(manifest, 'ambient', () => 0.999), 'blessing')
+  assert.equal(pickPetAction(manifest, 'ambient', () => 0.939), 'blessing')
+  assert.equal(pickPetAction(manifest, 'ambient', () => 0.94), 'swing-diagonal')
+  assert.equal(pickPetAction(manifest, 'ambient', () => 0.999), 'swing-diagonal')
 })
 
 test('click and speech gestures stay in their intended pools', () => {

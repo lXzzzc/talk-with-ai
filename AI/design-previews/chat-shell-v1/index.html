@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>昔涟 · 聊天界面设计预览</title>
+  <link rel="icon" href="/assets/ai-avatar.png" />
+  <link rel="stylesheet" href="/preview/styles.css" />
+</head>
+<body>
+  <svg class="icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="panel" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16M5.5 8h1M5.5 11h1"/></symbol>
+    <symbol id="plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="chat" viewBox="0 0 24 24"><path d="M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-5 3v-3a2 2 0 0 1-2-2V7a3 3 0 0 1 3-3Z"/><path d="M7 9h10M7 13h6"/></symbol>
+    <symbol id="phone" viewBox="0 0 24 24"><path d="m8 3 2 5-2 2a15 15 0 0 0 6 6l2-2 5 2v4a1 1 0 0 1-1 1C10 21 3 14 3 4a1 1 0 0 1 1-1Z"/></symbol>
+    <symbol id="weather" viewBox="0 0 24 24"><path d="M8 19h10a3 3 0 0 0 0-6 6 6 0 0 0-11-3 4.5 4.5 0 0 0 1 9Z"/><path d="M7 4V2M2 9H0M3 5 1.5 3.5M12 3l1-1"/></symbol>
+    <symbol id="moon" viewBox="0 0 24 24"><path d="M20 14.4A8.5 8.5 0 0 1 9.6 4a8.5 8.5 0 1 0 10.4 10.4Z"/></symbol>
+    <symbol id="sound" viewBox="0 0 24 24"><path d="m11 4-5 5H3v6h3l5 5ZM16 8a6 6 0 0 1 0 8M19 5a10 10 0 0 1 0 14"/></symbol>
+    <symbol id="mic" viewBox="0 0 24 24"><rect x="8" y="3" width="8" height="12" rx="4"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/></symbol>
+    <symbol id="arrow" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
+    <symbol id="more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+    <symbol id="copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h4"/></symbol>
+    <symbol id="flower" viewBox="0 0 24 24"><path d="M12 3c5 4 7 5 0 9-7-4-5-5 0-9Zm9 9c-4 5-5 7-9 0 4-7 5-5 9 0Zm-9 9c-5-4-7-5 0-9 7 4 5 5 0 9Zm-9-9c4-5 5-7 9 0-4 7-5 5-9 0Z"/></symbol>
+    <symbol id="chevron" viewBox="0 0 24 24"><path d="m14 6-6 6 6 6"/></symbol>
+  </svg>
+
+  <div class="wallpaper" aria-hidden="true"></div><div class="wallpaper-veil" aria-hidden="true"></div>
+  <div class="workspace" id="workspace">
+    <header class="topbar">
+      <div class="topbar-leading">
+        <button class="icon-button sidebar-toggle" id="sidebar-toggle" type="button" aria-label="隐藏会话侧栏" aria-controls="conversation-sidebar" aria-expanded="true" title="隐藏会话侧栏"><svg><use href="#panel"/></svg></button>
+        <div class="topbar-brand"><svg><use href="#flower"/></svg><strong>昔涟</strong><span class="brand-divider"></span><span class="brand-caption">温柔相伴</span></div>
+        <span class="preview-badge">设计预览</span>
+      </div>
+      <div class="topbar-actions">
+        <button class="icon-button" type="button" title="实时语音通话" data-preview="语音通话"><svg><use href="#phone"/></svg></button>
+        <button class="icon-button" type="button" title="查询天气" data-preview="天气查询"><svg><use href="#weather"/></svg></button>
+        <button class="icon-button sound-enabled" id="sound-toggle" type="button" title="关闭自动朗读" aria-pressed="true"><svg><use href="#sound"/></svg></button>
+        <span class="toolbar-divider"></span>
+        <button class="icon-button" id="theme-toggle" type="button" title="切换深浅主题" aria-label="切换深浅主题"><svg><use href="#moon"/></svg></button>
+      </div>
+    </header>
+
+    <aside class="conversation-sidebar" id="conversation-sidebar" aria-label="会话侧栏">
+      <div class="sidebar-profile"><img src="/assets/ai-avatar.png" alt="昔涟"/><div><strong>昔涟</strong><span><i></i> 安静陪着你</span></div><button class="icon-button sidebar-close" id="sidebar-close" type="button" title="收起侧栏" aria-label="收起侧栏"><svg><use href="#chevron"/></svg></button></div>
+      <button class="new-conversation" type="button" id="new-conversation"><svg><use href="#plus"/></svg>新建对话</button>
+      <div class="history-caption"><span>最近对话</span><span id="history-count">1</span></div>
+      <div class="conversation-list" id="conversation-list"><button class="conversation-entry selected" type="button" aria-current="page"><span class="history-icon"><svg><use href="#chat"/></svg></span><span class="conversation-summary"><strong>今天的天气怎么样</strong><span>想看看哪座城市的天气呢？</span></span><span class="history-more" title="会话操作"><svg><use href="#more"/></svg></span></button></div>
+      <div class="sidebar-bottom"><svg><use href="#flower"/></svg><p>每一次相遇，<br><span>都值得被温柔记住。</span></p></div>
+      <div class="sidebar-caption">你的对话，会留在这里</div>
+    </aside>
+
+    <main class="chat-pane">
+      <div class="conversation-heading"><div><span class="heading-eyebrow">与昔涟的对话</span><h1 id="conversation-title">今天的天气怎么样</h1></div><span class="conversation-date">今天</span></div>
+      <div class="message-scroll" id="message-scroll" role="log" aria-label="对话内容" aria-live="polite">
+        <div class="conversation-day"><span></span>今天 · 16:40<span></span></div>
+        <article class="message user"><div class="message-stack"><div class="message-meta"><span>你</span><time>16:40</time></div><div class="chat-bubble">今天的天气怎么样</div></div><div class="user-avatar" aria-hidden="true">我</div></article>
+        <article class="message assistant"><img class="message-avatar" src="/assets/ai-avatar.png" alt=""/><div class="message-stack"><div class="message-meta"><strong>昔涟</strong><svg><use href="#flower"/></svg><time>16:40</time></div><div class="chat-bubble">想看看哪座城市的天气呢？<br>告诉我城市名字，我就陪你一起看看。</div><div class="message-actions"><button type="button" title="复制回复" data-copy><svg><use href="#copy"/></svg></button><button type="button" title="朗读回复" data-preview="语音朗读"><svg><use href="#sound"/></svg></button></div></div></article>
+        <article class="message user"><div class="message-stack"><div class="message-meta"><span>你</span><time>16:41</time></div><div class="chat-bubble">杭州，也想听听你的出门建议。</div></div><div class="user-avatar" aria-hidden="true">我</div></article>
+        <article class="message assistant"><img class="message-avatar" src="/assets/ai-avatar.png" alt=""/><div class="message-stack"><div class="message-meta"><strong>昔涟</strong><svg><use href="#flower"/></svg><time>16:41</time></div><div class="chat-bubble">好呀，我们一起看看杭州的天空。<br>天气结果出来后，我会把温度、降雨和出门建议整理给你。</div><div class="message-actions"><button type="button" title="复制回复" data-copy><svg><use href="#copy"/></svg></button><button type="button" title="朗读回复" data-preview="语音朗读"><svg><use href="#sound"/></svg></button></div></div></article>
+      </div>
+
+      <div class="composer-area"><form class="composer" id="composer"><label class="visually-hidden" for="message-input">想对昔涟说的话</label><textarea id="message-input" rows="2" placeholder="今天有什么想和我分享的？"></textarea><div class="composer-controls"><button class="voice-button" type="button" id="voice-preview" title="按住说话"><svg><use href="#mic"/></svg><span>按住说话</span></button><div class="composer-trailing"><span class="keyboard-hint"><kbd>Enter</kbd> 发送 <i>·</i> <kbd>Shift + Enter</kbd> 换行</span><button class="send-button" id="send-button" type="submit" aria-label="发送消息" title="发送消息" disabled><svg><use href="#arrow"/></svg></button></div></div></form><div class="composer-footnote"><svg><use href="#flower"/></svg>慢慢说，我在听。</div></div>
+    </main>
+  </div>
+  <div class="preview-toast" id="preview-toast" role="status"></div>
+  <script src="/preview/preview.js"></script>
+</body>
+</html>

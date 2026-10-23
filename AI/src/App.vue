@@ -8,6 +8,11 @@ import { httpFetch } from './http.js'
 import { withUserId } from './httpRouting.js'
 import ConfirmDeleteDialog from './ConfirmDeleteDialog.vue'
 import AnimatedWallpaper from './AnimatedWallpaper.vue'
+import XilianDialogFrame from './XilianDialogFrame.vue'
+import { resolveChatUser } from './chatIdentity.js'
+import { setPetActivity } from './petActivity.js'
+import { ASSISTANT_PROFILE, USER_PROFILE } from './characterProfiles.js'
+import ProfileAvatar from './ProfileAvatar.vue'
 import {
   chooseLocalApplicationFile,
   findLocalApplications,
@@ -29,8 +34,9 @@ const endpoint = apiUrl('/api/ai/chat')
 const toolIntentEndpoint = apiUrl('/api/ai/tool-intent')
 const chatType = 'chat'
 const storageKey = 'spring-ai-test-conversations'
-const userIdKey = 'spring-ai-test-user-id'
 const themeKey = 'spring-ai-test-theme'
+const sidebarKey = 'spring-ai-test-sidebar'
+const narrowSidebarQuery = window.matchMedia('(max-width: 720px)')
 const weatherCityKey = 'spring-ai-test-weather-city'
 const weatherLocationKey = 'spring-ai-test-weather-location'
 const historyListEndpoint = '/api/getChatIds'
@@ -49,23 +55,8 @@ marked.setOptions({ breaks: true, gfm: true })
  * 用的是浏览器本地生成的匿名 id —— 它只能起到「按用户分区」的作用，不是身份认证，
  * 真要对外开放还需要接入真正的登录体系。
  */
-const userId = resolveUserId()
+const userId = resolveChatUser()
 const desktopRuntime = isDesktopRuntime()
-
-function newUserId() {
-  return crypto.randomUUID?.() || `u-${Date.now()}-${Math.random().toString(16).slice(2)}`
-}
-
-function resolveUserId() {
-  const stored = localStorage.getItem(userIdKey)
-  if (stored) return stored
-
-  // 兼容升级：旧版本前端从不传 userId，后端一律记为 "default"。
-  // 如果本机还留着旧版本的会话列表，就继续沿用 "default"，否则历史记录会凭空消失。
-  const resolved = localStorage.getItem(storageKey) ? 'default' : newUserId()
-  localStorage.setItem(userIdKey, resolved)
-  return resolved
-}
 
 const conversations = ref([])
 const activeConversationId = ref('')
@@ -75,9 +66,12 @@ const isLoading = ref(false)
 const responseStage = ref('idle')
 const errorText = ref('')
 const textareaRef = ref(null)
+const chatBodyRef = ref(null)
 const editingId = ref('')
 const editingTitle = ref('')
-const sidebarOpen = ref(false)
+const sidebarNarrow = ref(narrowSidebarQuery.matches)
+const sidebarOpen = ref(!sidebarNarrow.value && localStorage.getItem(sidebarKey) !== 'hidden')
+const sidebarToggleRef = ref(null)
 const isPinned = ref(true)
 const toast = ref('')
 const speakingIndex = ref(null)
@@ -105,6 +99,12 @@ let historySelection = 0
 let voiceChannel = null
 let voiceHeartbeatTimer = null
 let lastVoiceHeartbeat = 0
+const petRequestSource = Symbol('main-chat-request')
+const petTypingSource = Symbol('main-chat-draft')
+let petTypingTimer = null
+let petHistoryChannel = null
+let unsubscribePet = null
+let startupPaintTimer = null
 
 const suggestions = [
   { icon: '✦', title: '随便聊聊', text: '今天有什么值得开心的小事？' },
@@ -445,7 +445,7 @@ function newChat() {
   inputText.value = ''
   messages.value = []
   errorText.value = ''
-  closeSidebar()
+  closeSidebarOnNarrow()
   nextTick(() => {
     autoGrow()
     textareaRef.value?.focus()
@@ -456,7 +456,7 @@ async function selectConversation(conversation) {
   const selection = ++historySelection
   stopRequest()
   stopAllTts()
-  closeSidebar()
+  closeSidebarOnNarrow()
   activeConversationId.value = conversation.id
   messages.value = conversation.messages
   errorText.value = ''
@@ -588,27 +588,25 @@ function ensureConversation(prompt) {
 
 /* ------------------------------------------------------------ 滚动控制 */
 
-/**
- * 页面整体滚动（而不是把对话锁在一个内部滚动框里）：
- * 顶栏、输入框、侧栏用 position: sticky 固定在视口，正文随文档自然滚动，
- * 滚轮 = 普通的上下翻页。
- */
+/** 消息区独立滚动；用户查看旧消息时保留位置。 */
 function onScroll() {
-  const doc = document.documentElement
-  isPinned.value = doc.scrollHeight - window.scrollY - window.innerHeight < 80
+  const body = chatBodyRef.value
+  if (body) isPinned.value = body.scrollHeight - body.scrollTop - body.clientHeight < 80
 }
 
 async function scrollToBottom(force = false) {
   // 用户主动往上翻时不要把他拽回底部
   if (!force && !isPinned.value) return
   await nextTick()
-  window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'auto' })
+  const body = chatBodyRef.value
+  body?.scrollTo({ top: body.scrollHeight, behavior: 'auto' })
   isPinned.value = true
 }
 
 function jumpToBottom() {
   isPinned.value = true
-  window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' })
+  const body = chatBodyRef.value
+  body?.scrollTo({ top: body.scrollHeight, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
 }
 
 /* ---------------------------------------------------------------- TTS */
@@ -1455,17 +1453,29 @@ function autoGrow() {
   el.style.height = `${Math.min(el.scrollHeight, 180)}px`
 }
 
-function openSidebar() {
-  sidebarOpen.value = true
+function toggleSidebar() {
+  sidebarOpen.value = !sidebarOpen.value
+  if (!sidebarNarrow.value) localStorage.setItem(sidebarKey, sidebarOpen.value ? 'open' : 'hidden')
 }
 
 function closeSidebar() {
   sidebarOpen.value = false
+  if (!sidebarNarrow.value) localStorage.setItem(sidebarKey, 'hidden')
+  sidebarToggleRef.value?.focus()
+}
+
+function closeSidebarOnNarrow() {
+  if (sidebarNarrow.value) sidebarOpen.value = false
+}
+
+function onSidebarBreakpoint(event) {
+  sidebarNarrow.value = event.matches
+  sidebarOpen.value = !event.matches && localStorage.getItem(sidebarKey) !== 'hidden'
 }
 
 function onKeydown(event) {
   if (event.key === 'Escape') {
-    closeSidebar()
+    if (sidebarOpen.value) closeSidebar()
     weatherOpen.value = false
     if (!openingApp.value) pendingAppLaunch.value = null
     if (!screenshotBusy.value) pendingScreenInspection.value = null
@@ -1475,14 +1485,61 @@ function onKeydown(event) {
   }
 }
 
-watch(inputText, () => nextTick(autoGrow))
+watch(inputText, value => {
+  void nextTick(autoGrow)
+  clearTimeout(petTypingTimer)
+  setPetActivity(petTypingSource, value.trim() && !isLoading.value ? 'typing' : 'idle')
+  petTypingTimer = setTimeout(() => setPetActivity(petTypingSource, 'idle'), 1800)
+})
+watch([isLoading, toolPlanning, screenshotBusy, voiceState], ([loading, planning, capturing, voice]) => {
+  setPetActivity(petRequestSource, loading || planning || capturing || voice === 'transcribing'
+    ? 'thinking' : ['requesting', 'recording'].includes(voice) ? 'listening' : 'idle')
+  if (loading) setPetActivity(petTypingSource, 'idle')
+})
 watch([weatherLocation, recentApplication], publishVoiceContext)
 
+function startupReady() {
+  clearTimeout(startupPaintTimer)
+  void globalThis.xilianDesktop?.invoke('startup_ready')
+}
+
+async function onPetEvent(event) {
+  if (event.type !== 'open-conversation') return
+  if (isLoading.value || voiceCallActive.value) { showToast('请先结束当前回复或通话，再打开桌宠对话。'); return }
+  const remote = await fetchConversations()
+  mergePetHistory(remote)
+  const conversation = conversations.value.find(item => item.id === event.conversationId)
+  if (conversation) { conversation.messages = []; await selectConversation(conversation) }
+}
+
+function mergePetHistory(remote) {
+  const known = new Map(conversations.value.map(item => [item.id, item]))
+  conversations.value = mergeConversations(remote.map(item => {
+    const existing = known.get(item.id)
+    if (existing) { existing.title = item.title; return existing }
+    return item
+  }), conversations.value)
+}
+
 onMounted(async () => {
+  // A decoded wallpaper frame is ideal; the high-resolution poster is a safe
+  // offline fallback. Neither readiness path waits for the history API.
+  startupPaintTimer = setTimeout(startupReady, 2200)
+  unsubscribePet = globalThis.xilianDesktop?.onPetEvent(onPetEvent)
   document.documentElement.dataset.theme = theme.value
   window.addEventListener('keydown', onKeydown)
-  window.addEventListener('scroll', onScroll, { passive: true })
+  narrowSidebarQuery.addEventListener('change', onSidebarBreakpoint)
   if (globalThis.BroadcastChannel) {
+    petHistoryChannel = new BroadcastChannel('xilian-pet-chat-v1')
+    petHistoryChannel.onmessage = async ({ data }) => {
+      if (data?.type !== 'history' || data.userId !== userId || isLoading.value) return
+      const remote = await fetchConversations()
+      mergePetHistory(remote)
+      if (activeConversationId.value === data.conversationId) {
+        const conversation = activeConversation.value
+        if (conversation) { conversation.messages = []; await selectConversation(conversation) }
+      }
+    }
     voiceChannel = new BroadcastChannel(VOICE_CHANNEL)
     voiceChannel.onmessage = onVoiceWindowMessage
     voiceHeartbeatTimer = setInterval(() => {
@@ -1502,8 +1559,14 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  clearTimeout(petTypingTimer)
+  clearTimeout(startupPaintTimer)
+  setPetActivity(petRequestSource, 'idle')
+  setPetActivity(petTypingSource, 'idle')
+  unsubscribePet?.()
+  petHistoryChannel?.close()
   window.removeEventListener('keydown', onKeydown)
-  window.removeEventListener('scroll', onScroll)
+  narrowSidebarQuery.removeEventListener('change', onSidebarBreakpoint)
   clearTimeout(toastTimer)
   clearInterval(voiceHeartbeatTimer)
   voiceChannel?.close()
@@ -1514,19 +1577,19 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="app">
-    <AnimatedWallpaper />
+  <div class="app" :class="{ 'sidebar-hidden': !sidebarOpen }">
+    <AnimatedWallpaper @ready="startupReady" />
 
-    <aside class="sidebar" :class="{ open: sidebarOpen }">
+    <aside id="conversation-sidebar" class="sidebar" :class="{ open: sidebarOpen }" :inert="!sidebarOpen" :aria-hidden="!sidebarOpen" aria-label="会话侧栏">
       <div class="brand">
-        <div class="brand-logo">
-          <img src="/ai-avatar.png" alt="" />
-        </div>
+        <ProfileAvatar class="brand-logo" :profile="ASSISTANT_PROFILE" />
         <div class="brand-copy">
-          <span class="brand-kicker">AI COMPANION</span>
           <div class="brand-name">昔涟</div>
-          <div class="brand-sub">翁法洛斯第十三位黄金裔</div>
+          <div class="brand-sub"><span class="presence-dot"></span>安静陪着你</div>
         </div>
+        <button class="icon-btn sidebar-close" type="button" title="收起侧栏" aria-label="收起侧栏" @click="closeSidebar">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m14 6-6 6 6 6" /></svg>
+        </button>
       </div>
 
       <button class="new-chat" type="button" @click="newChat">
@@ -1537,7 +1600,7 @@ onBeforeUnmount(() => {
       </button>
 
       <div class="history-head">
-        <span class="history-title">历史记录</span>
+        <span class="history-title">最近对话</span>
         <span v-if="conversations.length" class="history-count">{{ conversations.length }}</span>
       </div>
 
@@ -1552,7 +1615,12 @@ onBeforeUnmount(() => {
           :key="conversation.id"
           class="history-item"
           :class="{ active: conversation.id === activeConversationId }"
+          role="button"
+          tabindex="0"
+          :aria-current="conversation.id === activeConversationId ? 'page' : undefined"
           @click="selectConversation(conversation)"
+          @keydown.enter.self.prevent="selectConversation(conversation)"
+          @keydown.space.self.prevent="selectConversation(conversation)"
         >
           <input
             v-if="editingId === conversation.id"
@@ -1585,36 +1653,26 @@ onBeforeUnmount(() => {
         <div v-if="conversations.length === 0" class="empty-history">还没有历史对话</div>
       </div>
 
-      <div class="sidebar-companion">
-        <div class="sidebar-companion-art" aria-hidden="true">
-          <img src="/xilian-portrait.png" alt="" />
-        </div>
-        <div class="sidebar-companion-copy">
-          <strong><span></span>昔涟在线</strong>
-          <p>愿此刻的涟漪，陪你去往想去的地方。</p>
-        </div>
+      <div class="sidebar-note">
+        <span aria-hidden="true">✧</span><p>每一次相遇，<br>都值得被温柔记住。</p>
       </div>
 
       <div class="sidebar-foot">
-        <span class="dot"></span>
-        <span>本机匿名身份 · 数据按浏览器分区</span>
+        <span>你的对话，会留在这里</span>
       </div>
     </aside>
 
-    <div v-if="sidebarOpen" class="overlay" @click="closeSidebar"></div>
+    <div v-if="sidebarOpen && sidebarNarrow" class="overlay sidebar-overlay" aria-hidden="true" @click="closeSidebar"></div>
 
     <main class="chat-panel">
       <header class="chat-header">
-        <button class="icon-btn menu-btn" type="button" title="会话列表" @click="openSidebar">
+        <button ref="sidebarToggleRef" class="icon-btn menu-btn" type="button" :title="sidebarOpen ? '隐藏会话侧栏' : '显示会话侧栏'" :aria-label="sidebarOpen ? '隐藏会话侧栏' : '显示会话侧栏'" aria-controls="conversation-sidebar" :aria-expanded="sidebarOpen" @click="toggleSidebar">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-            <path d="M4 7h16M4 12h16M4 17h16" />
+            <rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16M5.5 8h1M5.5 11h1"/>
           </svg>
         </button>
 
-        <div class="header-info">
-          <h1 class="header-title">{{ headerTitle }}</h1>
-          <p class="header-sub">{{ headerSub }}</p>
-        </div>
+        <div class="shell-brand"><span aria-hidden="true">✧</span><strong>昔涟</strong><span class="shell-brand-caption">温柔相伴</span></div>
 
         <div class="header-actions">
           <button class="icon-btn" :class="{ on: voiceCallActive }" type="button"
@@ -1725,7 +1783,8 @@ onBeforeUnmount(() => {
         </section>
       </header>
 
-      <section class="chat-body" @click="onBodyClick">
+      <div class="conversation-heading"><div><span class="heading-eyebrow">与昔涟的对话</span><h1 class="header-title">{{ headerTitle }}</h1><p v-if="headerSub" class="header-sub" role="status">{{ headerSub }}</p></div></div>
+      <section ref="chatBodyRef" class="chat-body" aria-label="对话内容" @scroll.passive="onScroll" @click="onBodyClick">
         <div v-if="messages.length === 0" class="hero">
           <div class="hero-copy">
             <div class="hero-kicker"><span></span> CYRENE · AI COMPANION</div>
@@ -1758,12 +1817,10 @@ onBeforeUnmount(() => {
             class="msg"
             :class="message.role"
           >
-            <div class="avatar">
-              <img v-if="message.role === 'assistant'" src="/ai-avatar.png" alt="AI" />
-              <template v-else>我</template>
-            </div>
+            <ProfileAvatar class="avatar" :profile="message.role === 'assistant' ? ASSISTANT_PROFILE : USER_PROFILE" />
 
             <div class="msg-main">
+              <div class="message-meta">{{ message.role === 'assistant' ? ASSISTANT_PROFILE.name : USER_PROFILE.name }}<span v-if="message.role === 'assistant'" aria-hidden="true">✧</span></div>
               <div class="bubble">
                 <span
                   v-if="message.role === 'assistant' && !message.content"
@@ -1850,7 +1907,8 @@ onBeforeUnmount(() => {
               v-model="inputText"
               rows="1"
               :maxlength="MAX_PROMPT_CHARS"
-              placeholder="输入消息，Enter 发送，Shift + Enter 换行"
+              placeholder="今天有什么想和我分享的？"
+              aria-label="想对昔涟说的话"
               @keydown.enter="handleEnter"
             ></textarea>
             <div class="composer-meta">
@@ -1882,6 +1940,7 @@ onBeforeUnmount(() => {
               <rect x="8" y="3" width="8" height="12" rx="4" />
               <path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6" />
             </svg>
+            <span>{{ voiceButtonTitle }}</span>
           </button>
 
           <button
@@ -1901,6 +1960,7 @@ onBeforeUnmount(() => {
             </svg>
           </button>
         </form>
+        <div class="composer-footnote"><span aria-hidden="true">✧</span>慢慢说，我在听。</div>
       </div>
     </main>
 
@@ -1910,20 +1970,20 @@ onBeforeUnmount(() => {
       role="presentation"
       @click.self="cancelApplicationLaunch"
     >
-      <section class="command-dialog" role="dialog" aria-modal="true" aria-labelledby="command-title">
+      <XilianDialogFrame :busy="openingApp" aria-labelledby="command-title" aria-describedby="command-description" @cancel="cancelApplicationLaunch">
         <div class="command-app-icon" aria-hidden="true">
           {{ selectedPendingApplication?.icon || '🔎' }}
         </div>
         <div class="command-copy">
-          <span class="command-tool-label">AI 工具意图 · open_application</span>
+          <span class="command-tool-label">打开应用</span>
           <h2 v-if="selectedPendingApplication" id="command-title">
             打开{{ selectedPendingApplication.label }}？
           </h2>
           <h2 v-else id="command-title">未找到“{{ pendingAppLaunch.target }}”</h2>
-          <p v-if="selectedPendingApplication">
+          <p v-if="selectedPendingApplication" id="command-description">
             来源：{{ selectedPendingApplication.sourceLabel }}。确认后将在你的电脑上启动该软件。
           </p>
-          <p v-else>可以手动选择它的 .exe 文件或开始菜单快捷方式，客户端会记住这台电脑上的位置。</p>
+          <p v-else id="command-description">可以手动选择它的 .exe 文件或开始菜单快捷方式，客户端会记住这台电脑上的位置。</p>
         </div>
 
         <div class="command-impact">
@@ -1961,7 +2021,7 @@ onBeforeUnmount(() => {
             {{ openingApp ? '正在打开…' : '确认打开' }}
           </button>
         </div>
-      </section>
+      </XilianDialogFrame>
     </div>
 
     <div
@@ -1970,12 +2030,12 @@ onBeforeUnmount(() => {
       role="presentation"
       @click.self="cancelCurrentWindowInspection"
     >
-      <section class="command-dialog" role="dialog" aria-modal="true" aria-labelledby="screen-command-title">
+      <XilianDialogFrame :busy="screenshotBusy" aria-labelledby="screen-command-title" aria-describedby="screen-command-description" @cancel="cancelCurrentWindowInspection">
         <div class="command-app-icon" aria-hidden="true">👁️</div>
         <div class="command-copy">
-          <span class="command-tool-label">AI 工具意图 · inspect_current_window</span>
+          <span class="command-tool-label">查看当前窗口</span>
           <h2 id="screen-command-title">查看当前窗口？</h2>
-          <p>{{ pendingScreenInspection.intent?.description || '确认后将截取当前前台窗口并交给视觉模型分析。' }}</p>
+          <p id="screen-command-description">{{ pendingScreenInspection.intent?.description || '确认后将截取当前前台窗口并交给视觉模型分析。' }}</p>
         </div>
 
         <div class="command-impact">
@@ -1991,7 +2051,7 @@ onBeforeUnmount(() => {
             {{ screenshotBusy ? '正在查看…' : '确认查看' }}
           </button>
         </div>
-      </section>
+      </XilianDialogFrame>
     </div>
 
     <ConfirmDeleteDialog v-if="pendingDeleteConversation" :title="pendingDeleteConversation.title"

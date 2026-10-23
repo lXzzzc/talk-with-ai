@@ -6,6 +6,8 @@ const http = require('node:http')
 const assert = require('node:assert/strict')
 const root = path.resolve(__dirname, '../../dist')
 const reportDir = path.resolve(__dirname, '../../reports/video-pet')
+fs.mkdirSync(reportDir, { recursive: true })
+app.setPath('userData', path.join(reportDir, 'stage-user-data'))
 app.disableHardwareAcceleration()
 let server
 let win
@@ -53,6 +55,23 @@ app.whenReady().then(async () => {
   await until(`document.querySelector('.video-pet-stage').dataset.action === 'idle'`)
   await win.webContents.executeJavaScript(`const s=document.querySelector('select');s.value='blessing';s.dispatchEvent(new Event('change',{bubbles:true}))`)
   await until(`document.querySelector('.video-pet-stage').dataset.action === 'blessing'`)
+  await win.webContents.executeJavaScript(`(() => { const s=document.querySelector('select');s.value='swing-diagonal';s.dispatchEvent(new Event('change',{bubbles:true})) })()`)
+  await until(`document.querySelector('.video-pet-stage').dataset.action === 'swing-diagonal'`)
+  const swing = await win.webContents.executeJavaScript(`(() => {
+    const v=document.querySelector('.video-pet-layer.is-active'), c=document.createElement('canvas');
+    c.width=c.height=360; const ctx=c.getContext('2d');ctx.drawImage(v,0,0);
+    const d=ctx.getImageData(0,0,360,360).data;let opaque=0,green=0;
+    for(let i=0;i<d.length;i+=4) { if(d[i+3]>240) opaque++;if(d[i+3]>128 && d[i+1]-Math.max(d[i],d[i+2])>75) green++; }
+    return {width:v.videoWidth,height:v.videoHeight,duration:v.duration,cornerAlpha:d[3],opaque,green};
+  })()`)
+  assert.equal(swing.width, 360)
+  assert.equal(swing.height, 360)
+  assert.equal(swing.cornerAlpha, 0)
+  assert.ok(swing.opaque > 10000)
+  assert.equal(swing.green, 0)
+  assert.ok(Math.abs(swing.duration - 10) < 0.1)
+  await win.webContents.executeJavaScript(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
+  fs.writeFileSync(path.join(reportDir, 'swing-stage.png'), (await win.webContents.capturePage()).toPNG())
   win.webContents.debugger.attach('1.3')
   await win.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
   await until(`getComputedStyle(document.querySelector('.video-pet-poster')).display !== 'none' && !document.querySelector('.video-pet-layer.is-active')`)
@@ -62,7 +81,7 @@ app.whenReady().then(async () => {
   fs.mkdirSync(reportDir, { recursive: true })
   fs.writeFileSync(path.join(reportDir, 'integrated-stage.png'), (await win.webContents.capturePage()).toPNG())
   assert.deepEqual(errors, [])
-  fs.writeFileSync(path.join(reportDir, 'stage-smoke.json'), JSON.stringify({alpha, click:true, speech:true, manualAction:true, reducedMotion:true, errors}, null, 2))
+  fs.writeFileSync(path.join(reportDir, 'stage-smoke.json'), JSON.stringify({alpha, swing, click:true, speech:true, manualAction:true, reducedMotion:true, errors}, null, 2))
   console.log('PASS: production stage, real alpha, click, speech, manual selection and reduced motion')
 }).catch(error => { console.error(error); process.exitCode = 1 }).finally(() => {
   win?.destroy()

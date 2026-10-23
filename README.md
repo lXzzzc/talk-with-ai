@@ -189,7 +189,7 @@ npm run dev
 | `CHAT_CONTEXT_MAX_CHARS` | `12000` | 送入模型的历史总字数上限 |
 | `TTS_MAX_TEXT_CHARS` | `5000` | 单次合成最大字符数 |
 | `TTS_CACHE_MAX_ENTRIES` / `TTS_CACHE_MAX_BYTES` | `200` / `50MB` | 语音缓存上限 |
-| `TTS_PROVIDER` / `TTS_FALLBACK_PROVIDER` | `fish` / `aliyun` | 首选与回退语音提供方 |
+| `TTS_PROVIDER` / `TTS_FALLBACK_PROVIDER` | `fish` / 空 | 默认只使用 Fish；显式填 `aliyun` 才启用备用音色，避免故障时静默换声 |
 | `TTS_FISH_API_KEY` | 空 | 使用 Fish Audio 时必填，只能放服务端 |
 | `TTS_FISH_REFERENCE_ID` | 空 | Fish Audio 克隆音色的模型 ID |
 | `TTS_FISH_MODEL` | `drama-3` | Fish Audio TTS 模型（已用当前音色实测） |
@@ -289,8 +289,8 @@ $env:TALK_AI_DESKTOP_API_URL = 'https://你的域名'
 npm run desktop:electron:build
 ```
 
-产物输出到 `releases/0.3.0/`：`XilianAI-0.3.0-x64-portable.exe` 可直接双击运行，
-`XilianAI-0.3.0-x64-setup.exe` 是一键安装包。重复构建的旧产物归档到 `releases/history/`。
+产物输出到 `releases/0.4.4/`：`XilianAI-0.4.4-x64-portable.exe` 可直接双击运行，
+`XilianAI-0.4.4-x64-setup.exe` 是一键安装包。重复构建的旧产物归档到 `releases/history/`。
 目录说明见 [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md)。关闭主窗口时应用会隐藏到系统托盘，
 托盘菜单可以重新显示或彻底退出；重复启动会激活已有窗口。
 
@@ -374,9 +374,9 @@ npm run desktop:electron
 
 ## 昔涟温柔动作桌宠（视频 v2）
 
-Electron 独立桌宠使用 `AI/src/VideoPetStage.vue`，素材位于 `AI/public/pets/xilian-video-v2/`。包含待机、行礼、轻憩、回眸、关切、倾听、祝福七段透明动画；两段源视频已有裁切的动作未加入。仅裁去左右透明留白以适配项目窗口，不修改人物服饰。主界面不再嵌入桌宠人物。
+Electron 独立桌宠使用 `AI/src/VideoPetStage.vue`，素材位于 `AI/public/pets/xilian-video-v2/`。包含待机、行礼、轻憩、回眸、关切、倾听、祝福及「羽翼秋千·斜轴轻荡」八段透明动画；两段源视频已有裁切的动作未加入。秋千素材去除绿幕，保留人物、吊绳、羽翼座椅与顶部枝叶，按全片范围固定缩放到画布。主界面不再嵌入桌宠人物。
 
-待机播放权重为70%，六个随机动作各5%。桌宠工具栏提供「回应」及具体动作选择；聊天或通话实际播放语音时，切换到关切/倾听手势，语音结束后恢复待机，不模拟口型同步。支持系统减少动态效果设置，以静态首帧替代动画。
+待机播放权重为70%，原六个随机动作各4%，斜轴轻荡为6%。桌宠工具栏的「动作」菜单可手动选择「羽翼秋千·斜轴轻荡」，播放一遍后恢复待机调度；「回应」和语音播放继续使用关切/倾听手势。支持系统减少动态效果设置，以静态首帧替代动画。
 
 Windows 推荐双击 `AI/start-desktop.vbs` 无窗口启动，构建和运行日志写入 `AI/desktop-launch.log`；`AI/start-desktop.cmd` 仅作为转发入口保留。若本机已有 DSH 的 Electron，无窗口入口会在当前进程中复用它，避免本机项目自带 Electron 的启动异常；不会修改全局环境或原有 DSH 配置。已有 `ELECTRON_OVERRIDE_DIST_PATH` 设置时优先保留。
 
@@ -385,12 +385,13 @@ Windows 推荐双击 `AI/start-desktop.vbs` 无窗口启动，构建和运行日
 ```powershell
 cd AI
 python tools/pet-video/import_gentle_pack.py <已处理的xilian-animation目录>
+python tools/pet-video/import_swing.py <01_羽翼秋千轻荡_绿幕源_斜轴轻荡.mp4>
 python tools/pet-video/verify_video_pet.py public/pets/xilian-video-v2 --report reports/video-pet
 npm test
 npm run build
 ```
 
-Electron渲染验证：使用可用的 Electron 运行 `tools/pet-video/smoke_stage.cjs`，检查透明显示、点击、语音状态、动作选择和减少动态效果；结果输出到 `reports/video-pet/`。导入器仅使用已经处理好的七段WebM，不依赖 DSH 服务运行。
+Electron渲染验证：使用可用的 Electron 运行 `tools/pet-video/smoke_stage.cjs`，检查透明显示、点击、语音状态、动作选择（含秋千）和减少动态效果；结果输出到 `reports/video-pet/`。基础导入器使用已经处理好的七段WebM，秋千导入器处理绿幕MP4，不依赖 DSH 服务运行。
 
 桌宠随桌面客户端自动创建，无需启动独立 DSH 桌宠或另外运行素材目录中的脚本。本机应用扫描在窗口创建后后台进行，不阻塞桌宠显示。再次启动已运行的客户端会显示主窗口并恢复被隐藏的桌宠，沿用同一个实例。关闭主窗口会按原有托盘逻辑隐藏窗口；在托盘选择「退出」时，主窗口、通话窗口和桌宠一起结束。此处是随客户端启动，不设置系统开机自启。
 
@@ -403,3 +404,31 @@ Electron渲染验证：使用可用的 Electron 运行 `tools/pet-video/smoke_st
 运行 `tools/wallpaper/smoke_wallpaper.cjs` 可验证动态壁纸渲染、动画推进、主界面无桌宠视频请求、静音和窄屏布局，截图与结果输出到 `reports/wallpaper/`。
 
 动态壁纸默认启用 GPU/WebGL 硬件加速，启动器不再传入禁用 GPU 或关闭沙箱的参数。背景画布最高按1倍设备像素比和约1920×1080像素预算绘制，避免高DPI下过度渲染；仅影响背景采样，不影响文字清晰度。隐藏窗口或启用减少动态效果时停止壁纸渲染，恢复显示后继续播放。仅在排查显卡兼容性时可临时设置 TALK_AI_SOFTWARE_RENDERING=1（软件渲染会显著降低Spine壁纸帧率）。
+
+## 桌宠交互与涟漪开屏（0.4.0）
+
+单击人物会播放温柔回应并在身旁显示短句；双击人物或点击工具栏「对话」展开独立气泡。按住人物移动超过6个逻辑像素才算拖动，拖动不会触发点击。气泡跟随人物移动并限制在当前显示器工作区域内，隐藏人物时一并隐藏。
+
+气泡使用与主界面相同的用户身份和 `/api/ai/chat` 接口，支持文字流式回复、Enter 发送、Shift+Enter 换行、停止请求、可选朗读和打开完整对话。朗读默认关闭。气泡对话使用独立会话，历史同步到主界面；本地只缓存最近40条，完整记录仍在服务端。输入时播放倾听动作，等待回复时安静待机，实际语音播放时使用回应动作，结束或取消后恢复待机；没有新增人物素材或口型同步。
+
+冷启动显示约3秒的涟漪、行礼与「你来了」欢迎画面，主界面同时在后台准备，不等待聊天接口。支持「跳过」及「下次直接进入」，系统减少动态效果时简化为静态欢迎。重复启动已运行的客户端直接恢复窗口。开屏关闭偏好写入用户目录 `startup-preferences.json`，要恢复开屏可退出客户端后删除该文件。
+
+`tools/pet-video/smoke_interactions.cjs` 使用独立测试资料与模拟后端验证真实窗口、IPC、点击/拖动、聊天、动作、取消及失败恢复；再加 `--disabled` 验证重启后跳过开屏并保留本地用户和气泡缓存。截图与报告位于 `AI/reports/video-pet/interactions/`，不进入发布包或 Git。
+
+## 昔涟确认弹窗（0.4.1）
+
+打开本机应用和查看当前窗口的确认卡片共用 `AI/src/XilianDialogFrame.vue`。透明 Q 版昔涟趴在卡片上缘，保留原角色服饰，配以花瓣徽记、涟漪线条和浅色花枝；支持深浅主题、窄窗口和短窗口滚动。装饰不接收点击，不遮挡操作范围说明和按钮。卡片打开时聚焦取消，Tab 在卡片内切换，Esc 取消；执行中禁用取消。
+
+人物素材位于 `AI/public/xilian-dialog-perch-v1.png`，使用内置 image_gen 生成，完整提示词和用途见 `AI/tools/ui/ASSET_NOTES.md`。运行 `AI/tools/ui/smoke_tool_dialog.cjs` 可在模拟本机应用目录和后端下验证真实确认流程，不会实际启动软件或截取桌面；截图保存在 `AI/reports/dialog/`。
+
+## 聊天气泡与会话侧栏（0.4.2）
+
+采用已确认的昔涟玫瑰、渐变羽饰与短缎带气泡装饰，预留正文空间，支持流式 Markdown 和代码块。聊天与输入区限制行宽，输入占位文案和快捷键说明分开显示。侧栏随内容增高，左上按钮可完整收起并使聊天居中，桌面端记住收起状态；窄窗口下使用抽屉，选中会话后自动收起。历史重命名、删除确认、语音及动态壁纸继续使用现有功能。消息区滚动、自动跟随和回到底部统一使用内部消息容器。
+
+`AI/src/chatShell.css` 的样式限制在主界面 `.app` 内，不影响独立桌宠、气泡聊天或语音窗口。运行 `cd AI` 后的 `node tools/ui/chat-shell-fixture.cjs` 可查看正式构建配合独立模拟会话的效果；所有数据仅在测试服务内存中保存，不连接真实聊天服务。
+
+0.4.3 默认将桌宠和聊天气泡保持在其他普通窗口上方，显示、恢复或切回主界面时重新置顶，气泡位于桌宠上方。置顶本身不抢输入焦点；主动打开聊天气泡时仍可正常输入。
+
+## 昔涟通话装饰（0.4.4）
+
+通话窗口使用参考原角色素材生成的透明玫瑰羽饰头像框，字幕卡片复用原服饰的趴窗昔涟，背景点缀淡花饰与水面涟漪。装饰不接收点击，不覆盖字幕和通话按钮；小窗口可滚动，隐藏字幕时同步收起卡片人物。新图片和完整生成提示词见 `AI/tools/ui/CALL_ASSET_NOTES.md`。

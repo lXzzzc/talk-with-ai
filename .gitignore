@@ -44,6 +44,8 @@ application-local.properties
 logs/
 *.log
 *.tmp
+__pycache__/
+*.py[cod]
 *.wav
 .tmp-*/
 .tmp-*.cmd

@@ -3,6 +3,7 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { limitWallpaperResolution } from './wallpaperRendering.js'
 
 const ROOT = '/wallpapers/xilian-workshop-3593357539/'
+const emit = defineEmits(['ready'])
 const host = ref(null)
 const stage = ref(null)
 const state = ref('loading')
@@ -70,19 +71,21 @@ onMounted(async () => {
       error: (_loaded, message) => {
         if (disposed) return
         state.value = 'fallback'
+        emit('ready')
         console.warn('[Wallpaper]', message)
       },
       draw: () => {
         // Keep the sharp poster until a real skeleton frame has been drawn.
         if (!disposed && state.value === 'loading') {
           state.value = 'ready'
+          emit('ready')
           updatePlayback()
         }
         if (!disposed && ++frames % 15 === 0) host.value.dataset.frames = String(frames)
       }
     })
   } catch (error) {
-    if (!disposed) { state.value = 'fallback'; console.warn('[Wallpaper]', error) }
+    if (!disposed) { state.value = 'fallback'; emit('ready'); console.warn('[Wallpaper]', error) }
   }
 })
 

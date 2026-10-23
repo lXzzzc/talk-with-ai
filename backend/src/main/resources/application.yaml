@@ -65,7 +65,7 @@ chat:
 
 tts:
   provider: ${TTS_PROVIDER:fish}
-  fallback-provider: ${TTS_FALLBACK_PROVIDER:aliyun}
+  fallback-provider: ${TTS_FALLBACK_PROVIDER:}
   max-text-chars: ${TTS_MAX_TEXT_CHARS:5000}
   cache:
     max-entries: ${TTS_CACHE_MAX_ENTRIES:200}

@@ -79,6 +79,24 @@
       "frames": 240,
       "sha256": "60ac854c3c25c693bd6b34c8200cad9385b2178ecd4821f8a3972459b43a79fb",
       "sourceSha256": "373a2d9fcd5630b6189bc2470b827ef40c7fc46d1b9835cbabd26c218fc03d7f"
+    },
+    "swing-diagonal": {
+      "id": "swing-diagonal",
+      "label": "羽翼秋千·斜轴轻荡",
+      "file": "swing-diagonal-v1.webm",
+      "duration": 10.0,
+      "fps": 24,
+      "frames": 240,
+      "sha256": "d558209c8a5010782e616396a937aebc523c493a70c3b1ab8778c4d948788f79",
+      "sourceSha256": "84a5c8d35f172b087b03246d898c8638c8f71a436e57d897e1d3b11b0efe081c",
+      "sourceFile": "01_羽翼秋千轻荡_绿幕源_斜轴轻荡.mp4",
+      "loopMethod": "source",
+      "sourceBounds": [
+        224,
+        70,
+        708,
+        486
+      ]
     }
   },
   "pools": {
@@ -89,27 +107,31 @@
       },
       {
         "action": "greeting",
-        "weight": 5
+        "weight": 4
       },
       {
         "action": "rest",
-        "weight": 5
+        "weight": 4
       },
       {
         "action": "glance",
-        "weight": 5
+        "weight": 4
       },
       {
         "action": "care",
-        "weight": 5
+        "weight": 4
       },
       {
         "action": "listen",
-        "weight": 5
+        "weight": 4
       },
       {
         "action": "blessing",
-        "weight": 5
+        "weight": 4
+      },
+      {
+        "action": "swing-diagonal",
+        "weight": 6
       }
     ],
     "tap": [

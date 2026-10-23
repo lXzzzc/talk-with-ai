@@ -25,7 +25,7 @@ public class TtsService {
     public TtsService(
             AudioCache audioCache,
             @Value("${tts.provider:fish}") String provider,
-            @Value("${tts.fallback-provider:aliyun}") String fallbackProvider,
+            @Value("${tts.fallback-provider:}") String fallbackProvider,
             @Value("${tts.fish.endpoint:https://api.fish.audio/v1/tts}") String fishEndpoint,
             @Value("${tts.fish.api-key:}") String fishApiKey,
             @Value("${tts.fish.reference-id:}") String fishReferenceId,

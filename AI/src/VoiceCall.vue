@@ -1,13 +1,20 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { setPetSpeaking } from './petSpeech.js'
+import { setPetActivity } from './petActivity.js'
+import { ASSISTANT_PROFILE, USER_PROFILE } from './characterProfiles.js'
+import ProfileAvatar from './ProfileAvatar.vue'
 import { RealtimeVoiceCall } from './realtimeVoice.js'
 import { formatCallDuration } from './voiceProtocol.js'
 import { VOICE_CHANNEL, VOICE_CONTEXT_KEY } from './voiceCallWindow.js'
 
 const status = ref('idle')
 const speechId = Symbol('voice-call')
-watch(status, value => setPetSpeaking(speechId, value === 'speaking'))
+watch(status, value => {
+  setPetSpeaking(speechId, value === 'speaking')
+  setPetActivity(speechId, ['hearing', 'listening'].includes(value) ? 'listening'
+    : ['thinking', 'connecting'].includes(value) ? 'thinking' : 'idle')
+})
 const muted = ref(false)
 const subtitles = ref(true)
 const level = ref(0)
@@ -162,6 +169,7 @@ function dispose() {
   if (disposed) return
   hangup()
   setPetSpeaking(speechId, false)
+  setPetActivity(speechId, 'idle')
   announce(false)
   disposed = true
   clearInterval(ticker)
@@ -197,6 +205,7 @@ onBeforeUnmount(() => { dispose(); document.body.classList.remove('voice-call-bo
 
 <template>
   <main class="call-screen" :class="{ 'is-speaking': status === 'speaking', 'is-listening': status === 'hearing' }">
+    <div class="call-atmosphere" aria-hidden="true"><span class="call-water-ripples"></span><span class="call-sparkle sparkle-one">✧</span><span class="call-sparkle sparkle-two">✦</span></div>
     <header class="call-topbar">
       <span class="call-brand"><span class="call-brand-dot"></span> 昔涟 · 实时语音</span>
       <span class="call-live-badge">{{ active ? '通话中' : '语音陪伴' }}</span>
@@ -205,7 +214,8 @@ onBeforeUnmount(() => { dispose(); document.body.classList.remove('voice-call-bo
     <section class="call-person" aria-label="通话对象">
       <div class="call-avatar-wrap" :style="{ '--voice-level': level }">
         <div class="call-orbit orbit-one"></div><div class="call-orbit orbit-two"></div>
-        <img class="call-avatar" src="/ai-avatar.png" alt="昔涟" />
+        <ProfileAvatar class="call-avatar" :profile="ASSISTANT_PROFILE" />
+        <img class="call-avatar-frame" src="/xilian-call-avatar-frame-v1.png" alt="" aria-hidden="true" draggable="false" />
         <span class="call-online"></span>
       </div>
       <h1>昔涟</h1>
@@ -219,20 +229,24 @@ onBeforeUnmount(() => { dispose(); document.body.classList.remove('voice-call-bo
       </div>
     </section>
 
+    <div class="call-caption-stage">
+      <img v-if="subtitles" class="call-caption-mascot" src="/xilian-dialog-perch-v1.png" alt="" aria-hidden="true" draggable="false" />
     <section v-if="subtitles" class="call-caption-box" aria-label="通话字幕">
       <div class="call-caption-heading"><span>实时字幕</span><span>{{ location ? `⌖ ${location}` : '声音连接着我们' }}</span></div>
       <div ref="transcriptPane" class="call-caption-scroll">
         <p v-if="!transcript.length && !draft" class="call-caption-empty">
+          <span class="call-caption-flower" aria-hidden="true">✧</span>
           {{ active ? '直接说话就好，停顿后我会回答你。' : '准备好时，开始我们的通话吧。' }}
         </p>
         <div v-for="(message, index) in transcript" :key="index" class="call-caption-line" :class="message.role">
-          <span>{{ message.role === 'user' ? '你' : '昔涟' }}</span>
+          <span>{{ message.role === 'user' ? USER_PROFILE.name : ASSISTANT_PROFILE.name }}</span>
           <p>{{ message.text }}<small v-if="message.interrupted">已打断</small></p>
         </div>
-        <div v-if="draft" class="call-caption-line user draft"><span>你</span><p>{{ draft }}<b>…</b></p></div>
+        <div v-if="draft" class="call-caption-line user draft"><span>{{ USER_PROFILE.name }}</span><p>{{ draft }}<b>…</b></p></div>
       </div>
     </section>
     <div v-else class="call-caption-hidden">字幕已隐藏，你依然可以直接和我说话</div>
+    </div>
 
     <p v-if="error" class="call-error" role="alert">{{ error }}</p>
 
@@ -346,4 +360,63 @@ onBeforeUnmount(() => { dispose(); document.body.classList.remove('voice-call-bo
   .call-error { margin-top: 7px; padding: 7px 10px; font-size: 11px; }
 }
 @media (prefers-reduced-motion: reduce) { .call-screen * { animation: none !important; transition: none !important; } }
+
+/* Xilian's reference art supplies the ornament; controls and subtitles stay unobstructed. */
+.call-screen { position: relative; isolation: isolate; min-height: 0; overflow-x: hidden; overflow-y: auto; background: radial-gradient(ellipse at 30% 12%,#56385085,transparent 52%),radial-gradient(ellipse at 100% 85%,#4a3b6266,transparent 54%),#171222; }
+.call-atmosphere { position: absolute; z-index: -1; inset: 0; overflow: hidden; pointer-events: none; }
+.call-atmosphere::before { content: ''; position: absolute; width: 330px; height: 310px; top: -65px; left: -180px; background: url('/xilian-bubble-corner-v1.png') center/contain no-repeat; opacity: .09; transform: rotate(28deg); }
+.call-atmosphere::after { content: ''; position: absolute; width: 310px; height: 290px; bottom: -110px; right: -140px; background: url('/xilian-bubble-corner-v1.png') center/contain no-repeat; opacity: .075; transform: rotate(180deg); }
+.call-water-ripples { position: absolute; width: 490px; height: 230px; border: 1px solid #cfb1e31f; border-radius: 50%; left: 50%; bottom: -130px; transform: translateX(-50%); box-shadow: 0 0 0 20px #c3a8e006,0 0 0 42px #c3a8e006,0 0 0 68px #c3a8e004; }
+.call-sparkle { position: absolute; font-size: 18px; color: #d0b2df60; }
+.call-sparkle.sparkle-one { top: 22%; left: 11%; }
+.call-sparkle.sparkle-two { top: 33%; right: 12%; font-size: 10px; opacity: .7; }
+.call-topbar { position: relative; z-index: 1; flex-shrink: 0; }
+.call-live-badge { color: #d5bfdc; background: #d4b3e10a; border-color: #e4b2d22b; }
+.call-person { padding-top: 45px; }
+.call-avatar-wrap { margin-bottom: 36px; }
+.call-avatar { z-index: 1; border-width: 2px; box-shadow: 0 8px 35px #0b031a66,0 0 35px #c9a9e41f; }
+.call-avatar-frame { position: absolute; z-index: 2; width: 158%; height: 158%; max-width: none; left: -29%; top: -29%; object-fit: contain; pointer-events: none; filter: drop-shadow(0 3px 8px #b47fc022); }
+.call-online { z-index: 3; right: 1px; bottom: 7px; box-shadow: 0 0 10px #bfd5c144; }
+.call-orbit { inset: -24px; border-color: #dca5c118; }
+.call-orbit.orbit-two { inset: -37px; border-style: dashed; opacity: .55; }
+.call-person h1 { font-size: 28px; color: #f5e7f7; text-shadow: 0 0 25px #dba2da22; }
+.call-person-note { color: #b5a0b7; font-size: 11px; letter-spacing: 1.5px; }
+.call-status { margin-top: 17px; }
+.call-wave { margin-bottom: 4px; }
+.call-caption-stage { flex: 1; min-height: 140px; position: relative; display: flex; flex-direction: column; margin-top: 29px; }
+.call-caption-mascot { position: absolute; z-index: 2; width: 104px; height: auto; right: 12px; top: -53px; pointer-events: none; filter: drop-shadow(0 5px 8px #10051b33); }
+.call-caption-box { border: 1px solid #d3aed032; background: linear-gradient(145deg,#ffffff08,#d9b8ee04); box-shadow: inset 0 1px #fff0ff08,0 8px 24px #09041316; }
+.call-caption-heading { padding-top: 16px; color: #d2b4cd; }
+.call-caption-heading > span:first-child::before { content: '✧'; margin-right: 6px; color: #ddbadc; }
+.call-caption-heading span:last-child { color: #a48da7; }
+.call-caption-scroll { height: auto; }
+.call-caption-empty { display: flex; flex-direction: column; gap: 12px; align-items: center; justify-content: center; min-height: 80px; padding: 12px 0; margin: 0; color: #b39cb3; }
+.call-caption-flower { color: #d5b1d77a; font-size: 26px; line-height: 1; }
+.call-caption-hidden { border: 1px dashed #d3aed022; border-radius: 18px; background: #ffffff03; padding: 15px; text-align: center; line-height: 1.8; }
+.call-bottom { position: relative; }
+.call-control > span { border-color: #d7b4d82a; background: #d5b1d506; }
+.call-control.selected > span { background: linear-gradient(145deg,#edb5d124,#bfa4df16); border-color: #e3b9dd4d; box-shadow: inset 0 1px #fff1ff0b; }
+.call-main-button.dial { border: 1px solid #ffe4f154; background: linear-gradient(110deg,#edc2d9,#d6c4ee 72%,#c5d5eb); box-shadow: 0 8px 30px #d4acce19,inset 0 1px #fff5ff55; }
+.call-footnote { line-height: 1.7; }
+@media(max-height:720px) {
+  .call-person { padding-top: 40px; }
+  .call-avatar-wrap { margin-bottom: 31px; }
+  .call-caption-stage { margin-top: 25px; min-height: 125px; }
+  .call-caption-mascot { width: 94px; top: -48px; }
+}
+@media(max-height:620px) {
+  .call-person { padding-top: 25px; }
+  .call-avatar-wrap { margin-bottom: 23px; }
+  .call-person h1 { font-size: 24px; }
+  .call-person-note { font-size: 10px; letter-spacing: 1px; }
+  .call-status { margin-top: 10px; }
+  .call-caption-stage { margin-top: 21px; min-height: 102px; }
+  .call-caption-mascot { width: 77px; top: -39px; right: 10px; }
+  .call-caption-heading { padding-top: 12px; }
+  .call-caption-empty { gap: 5px; min-height: 0; padding: 4px 0; font-size: 10px; }
+  .call-caption-flower { font-size: 21px; }
+  .call-bottom { padding-top: 11px; }
+  .call-secondary-controls { margin-bottom: 8px; }
+  .call-wave { height: 16px; }
+}
 </style>

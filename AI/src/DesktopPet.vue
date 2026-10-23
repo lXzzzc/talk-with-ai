@@ -5,10 +5,14 @@ import VideoPetStage from './VideoPetStage.vue'
 const stageRef = ref(null)
 const actions = ref([])
 const selectedAction = ref('')
+let clickTimer = null
+let pointer = null
+let disposed = false
+let lastDoubleClick = 0
 
 async function desktopInvoke(command) {
   try {
-    await globalThis.xilianDesktop?.invoke(command)
+    return await globalThis.xilianDesktop?.invoke(command)
   } catch (error) {
     console.warn(`Desktop pet command failed: ${command}`, error)
   }
@@ -19,18 +23,51 @@ function playAction(action) {
   selectedAction.value = ''
 }
 
+function respond() {
+  playAction()
+  void desktopInvoke('pet_respond')
+}
+function openBubble() {
+  lastDoubleClick = Date.now()
+  clearTimeout(clickTimer)
+  void desktopInvoke('pet_open_bubble')
+}
+function beginTouch(event) {
+  if (event.button !== 0 || pointer !== null) return
+  clearTimeout(clickTimer)
+  pointer = event.pointerId
+  event.currentTarget.setPointerCapture(event.pointerId)
+  void desktopInvoke('pet_drag_begin')
+}
+async function endTouch(event, cancelled = false) {
+  if (pointer !== event.pointerId) return
+  pointer = null
+  const result = await desktopInvoke('pet_drag_end')
+  if (!disposed && !cancelled && !result?.dragged && event.detail < 2 && Date.now() - lastDoubleClick > 400) {
+    clickTimer = setTimeout(respond, 230)
+  }
+}
+
 onMounted(() => {
   document.body.classList.add('desktop-pet-body')
 })
 
 onBeforeUnmount(() => {
+  disposed = true
+  clearTimeout(clickTimer)
+  void desktopInvoke('pet_drag_end')
   document.body.classList.remove('desktop-pet-body')
 })
 </script>
 
 <template>
   <main class="desktop-pet" aria-label="昔涟桌宠">
-    <div class="pet-drag-surface" title="拖动昔涟">
+    <div class="pet-drag-surface" role="button" tabindex="0"
+      aria-label="昔涟：单击回应，双击聊天，拖动移动位置"
+      title="单击回应 · 双击聊天 · 拖动移动"
+      @pointerdown="beginTouch" @pointerup="endTouch($event)"
+      @pointercancel="endTouch($event, true)" @lostpointercapture="endTouch($event, true)"
+      @dblclick="openBubble" @keydown.enter.prevent="respond" @keydown.space.prevent="openBubble">
       <div class="pet-motion">
         <VideoPetStage
           ref="stageRef"
@@ -41,8 +78,8 @@ onBeforeUnmount(() => {
     </div>
 
     <nav class="pet-controls" aria-label="桌宠操作">
-      <button type="button" title="打开对话" @click="desktopInvoke('pet_open_chat')">对话</button>
-      <button type="button" title="温柔回应" @click="playAction()">回应</button>
+      <button type="button" title="打开气泡对话" @click="openBubble">对话</button>
+      <button type="button" title="温柔回应" @click="respond">回应</button>
       <select v-model="selectedAction" aria-label="选择桌宠动作" @change="playAction(selectedAction)">
         <option value="" disabled>动作</option>
         <option v-for="action in actions" :key="action.id" :value="action.id">{{ action.label }}</option>
@@ -80,8 +117,12 @@ body.desktop-pet-body {
   display: flex;
   align-items: flex-end;
   justify-content: center;
-  -webkit-app-region: drag;
+  cursor: grab;
+  touch-action: none;
+  outline-offset: -5px;
 }
+.pet-drag-surface:active { cursor: grabbing; }
+.pet-drag-surface:focus-visible { outline: 1px dashed #e2c8f7; border-radius: 25px; }
 
 .pet-motion {
   width: 334px;

@@ -1,5 +1,5 @@
 // TTS 客户端封装 —— 调用后端 /api/ai/tts 接口。
-// 后端把请求转发给本地部署的 IndexTTS（index-tts 项目的 WebUI），返回 WAV 音频。
+// 后端统一选择 TTS 提供方，默认使用 Fish Audio 的已配置音色，返回 WAV 音频。
 
 import { apiUrl } from './api.js'
 import { httpFetch } from './http.js'
@@ -19,7 +19,7 @@ function getAudioContext() {
  * @param {string} text - 要朗读的文本。
  * @param {object} [options]
  * @param {AbortSignal} [options.signal] - 用于取消请求。
- * @returns {Promise<Blob>} 音频 Blob（本地 IndexTTS 输出 WAV）。
+ * @returns {Promise<Blob>} 后端语音服务返回的 WAV 音频。
  */
 export async function synthesize(text, options = {}) {
   const { signal } = options
